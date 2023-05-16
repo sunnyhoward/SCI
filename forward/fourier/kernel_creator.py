@@ -118,4 +118,6 @@ def create_fourier_kernel():
 
         
     ninecopyconvolution = torch.fft.fftshift(ninecopyconvolution,dim=(0,1))
+
+    ninecopyconvolution = ninecopyconvolution / torch.sum(ninecopyconvolution,dim=(0,1))
     return ninecopyconvolution

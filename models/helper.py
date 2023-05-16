@@ -1,7 +1,7 @@
 import torch
 from torch.utils.data import Dataset
 import h5py
-from forward.rolling.method import calc_psi_z
+import forward as fwd
 import time
 
 
@@ -20,8 +20,6 @@ def train(model, optimizer, loss_fn, train_dl, val_dl, epochs=100, device='gpu')
     start_time_sec = time.time()
 
     for epoch in range(1, epochs+1):
-        print('epoch '+ str(epoch))
-
         # --- TRAIN AND EVALUATE ON TRAINING SET -----------------------------
         model.train()
         train_loss         = 0.0
@@ -43,8 +41,14 @@ def train(model, optimizer, loss_fn, train_dl, val_dl, epochs=100, device='gpu')
             # num_train_correct  += (torch.max(yhat, 1)[1] == y).sum().item()
             num_train_examples += x.shape[0]
 
-            print('Batch %3d/%3d, loss: %5.5g'  % \
-                (n, len(train_dl.indexes)/train_dl.batch_size, train_loss/num_train_examples),end='\r')
+            print('Epoch%3d/%3d: (%3d/%3d), train loss: %5.5g' % \
+                (epoch, epochs,n, len(train_dl.indexes)/train_dl.batch_size, train_loss/num_train_examples),end='\r')
+
+            # print('Batch %3d/%3d, loss: %5.5g'  % \
+            #     (n, len(train_dl.indexes)/train_dl.batch_size, train_loss/num_train_examples),end='\r')
+        
+        # print('Batch %3d/%3d, loss: %5.5g'  % \
+        #         (n, len(train_dl.indexes)/train_dl.batch_size, train_loss/num_train_examples))
 
         train_loss  = train_loss / len(train_dl.indexes)
 
@@ -67,9 +71,9 @@ def train(model, optimizer, loss_fn, train_dl, val_dl, epochs=100, device='gpu')
         val_loss = val_loss / len(val_dl.indexes)
 
 
-        if epoch == 1 or epoch % 10 == 0:
-          print('Epoch %3d/%3d, train loss: %5.5g, val loss: %5.5g' % \
-                (epoch, epochs, train_loss, val_loss))
+        # if epoch == 1 or epoch % 10 == 0:
+        print('Epoch %3d/%3d: (%3d/%3d), train loss: %5.5g, val loss: %5.5g' % \
+                (epoch, epochs,len(train_dl.indexes)/train_dl.batch_size, len(train_dl.indexes)/train_dl.batch_size, train_loss, val_loss))
 
         history['loss'].append(train_loss)
         history['val_loss'].append(val_loss)
@@ -112,24 +116,28 @@ class CustomDataLoader:
         return len(self.dataset) // self.batch_size
 
 
+
 class SyntheticDataset(Dataset):
     '''
     Generate data for training by taking an undispersed cube, dispersing it and applying spectral modulation.
 
             Parameters:
                     undispersed_cube (array)
-                    dispersions (array): the dispersion information for each channel
+                    shift_info (dict): contains either dispersion array or kernel.
                     spectra (array): the spectral modulation information from fts
 
             Returns:
                     (array): undispersed, unintegrated cube
     '''
-    def __init__(self, undispersed_cube, dispersions, spectra):
+    def __init__(self, undispersed_cube, shift_info, spectra, method='fourier', crop=True):
         super(SyntheticDataset, self).__init__()
 
         self.data = torch.tensor(undispersed_cube)
-        self.shift_info = {'dispersions':torch.tensor(dispersions)}
+        self.shift_info = shift_info
         self.spectra = torch.tensor(spectra)
+        self.crop = crop    
+        self.sensing_function = fwd.fourier.method.calc_psi_z if method == 'fourier' else fwd.rolling.method.calc_psi_z
+
 
     def __len__(self):
         return len(self.spectra[0])
@@ -140,9 +148,13 @@ class SyntheticDataset(Dataset):
 
         x = x.permute(0,3,1,2)
 
-        y = calc_psi_z(torch.ones_like(x),x,shift_info=self.shift_info)  # Convert labels to a PyTorch tensor
+        y = self.sensing_function(torch.ones_like(x),x,shift_info=self.shift_info)  # Convert labels to a PyTorch tensor
         
-        y = y.unsqueeze(1)
+        # y = y.unsqueeze(1)
+        if self.crop:
+            nx,ny = x.shape[2:]
+
+            x = x[...,nx//2 - 320 : nx//2+320,ny//2 - 320 : ny//2+320]
         
         return y, x
 
