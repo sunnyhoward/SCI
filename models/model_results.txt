@@ -1,0 +1,20 @@
+train called: model=fourier_denoiser, opt=Adam(lr=0.000500), epochs=15, device=cuda
+
+Epoch 1/15: (74/74), train loss: 0.0010786, val_loss = 0.00025127
+Epoch 2/15: (74/74), train loss: 0.00024505, val_loss = 0.00024921
+Epoch 3/15: (74/74), train loss: 0.00024397, val_loss = 0.00024762
+Epoch 4/15: (74/74), train loss: 0.00021467, val_loss = 0.00014166
+Epoch 5/15: (74/74), train loss: 8.1518e-05, val_loss = 5.9342e-05
+Epoch 6/15: (74/74), train loss: 4.754e-05, val_loss = 4.6861e-05
+Epoch 7/15: (74/74), train loss: 3.993e-05, val_loss = 4.2323e-05
+Epoch 8/15: (74/74), train loss: 3.5861e-05, val_loss = 4.1159e-05
+Epoch 9/15: (74/74), train loss: 3.3099e-05, val_loss = 3.5886e-05
+Epoch 10/15: (74/74), train loss: 3.109e-05, val_loss = 3.6865e-05
+Epoch 11/15: (74/74), train loss: 2.9699e-05, val_loss = 3.2849e-05
+Epoch 12/15: (74/74), train loss: 2.9161e-05, val_loss = 3.6744e-05
+Epoch 13/15: (74/74), train loss: 2.916e-05, val_loss = 3.1029e-05
+Epoch 14/15: (74/74), train loss: 2.6881e-05, val_loss = 3.0993e-05
+Epoch 15/15: (74/74), train loss: 2.6424e-05, val_loss = 3.0358e-05
+
+Time total:     434.93 sec
+Time per epoch: 29.00 sec

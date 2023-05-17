@@ -7,7 +7,6 @@ For each copy, we can potentially try and first un-integrate and un-disperse tha
 ## Models
 The ML models and the helper functions
 - Implement Wiener deconvolution instead of just division. I also like the idea of making the fourier-kernel trainable.
-- Implement CoordGate to 
 - Maybe make a model to analyse each copy separately, before bringing them together. 
 
 ## Forward

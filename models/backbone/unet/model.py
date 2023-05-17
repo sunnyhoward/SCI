@@ -1,48 +1,61 @@
 """ Full assembly of the parts to form the complete network """
 
-from .functions import *
+from .modules import *
 
 
 class UNet(nn.Module):
-    def __init__(self, n_channels, n_classes, bilinear=False, BN=False):
+    def __init__(self, n_channels, n_classes, n_levels, bilinear=False, BN=False, ):
         super(UNet, self).__init__()
         self.n_channels = n_channels
         self.n_classes = n_classes
         self.bilinear = bilinear
 
-        self.inc = (DoubleConv(n_channels, 64,BN=BN))
-        self.down1 = (Down(64, 128,BN=BN))
-        self.down2 = (Down(128, 256,BN=BN))
-        self.down3 = (Down(256, 512,BN=BN))
+        clist = [64,128,256,512,1024]
+
+        self.inc = (DoubleConv(n_channels, clist[0],BN=BN)) #input convolution
+
+
+        self.downs = nn.ModuleList()
+        self.ups = nn.ModuleList()
+
         factor = 2 if bilinear else 1
-        self.down4 = (Down(512, 1024 // factor,BN=BN))
-        self.up1 = (Up(1024, 512 // factor, bilinear,BN=BN))
-        self.up2 = (Up(512, 256 // factor, bilinear,BN=BN))
-        self.up3 = (Up(256, 128 // factor, bilinear,BN=BN))
-        self.up4 = (Up(128, 64, bilinear,BN=BN))
-        self.outc = (OutConv(64, n_classes))
+
+        for i in range(n_levels-1): 
+            if i!=n_levels-2:
+                self.downs.append(Down(clist[i], clist[i+1],BN=BN))
+            else:
+                self.downs.append(Down(clist[i], clist[i+1]//factor,BN=BN))
+
+            self.ups.append(Up(clist[n_levels-1-i], clist[n_levels-1 -i-1]//factor, bilinear,BN=BN))
+
+        self.outc = (OutConv(clist[0], n_classes))
+
+
+
 
     def forward(self, x):
-        x1 = self.inc(x)
-        x2 = self.down1(x1)
-        x3 = self.down2(x2)
-        x4 = self.down3(x3)
-        x5 = self.down4(x4)
-        x = self.up1(x5, x4)
-        x = self.up2(x, x3)
-        x = self.up3(x, x2)
-        x = self.up4(x, x1)
-        logits = self.outc(x)
-        return logits
+        
+        x = self.inc(x)
 
-    def use_checkpointing(self):
-        self.inc = torch.utils.checkpoint(self.inc)
-        self.down1 = torch.utils.checkpoint(self.down1)
-        self.down2 = torch.utils.checkpoint(self.down2)
-        self.down3 = torch.utils.checkpoint(self.down3)
-        self.down4 = torch.utils.checkpoint(self.down4)
-        self.up1 = torch.utils.checkpoint(self.up1)
-        self.up2 = torch.utils.checkpoint(self.up2)
-        self.up3 = torch.utils.checkpoint(self.up3)
-        self.up4 = torch.utils.checkpoint(self.up4)
-        self.outc = torch.utils.checkpoint(self.outc)
+        x_skips = []
+        for i in range(len(self.downs)):
+            x_skips.append(x)
+            x = self.downs[i](x)
+
+        for i in range(len(self.ups)):
+            x = self.ups[i](x, x_skips[-i-1])
+    
+        y = self.outc(x)
+        return y
+
+    # def use_checkpointing(self):
+    #     self.inc = torch.utils.checkpoint(self.inc)
+    #     self.down1 = torch.utils.checkpoint(self.down1)
+    #     self.down2 = torch.utils.checkpoint(self.down2)
+    #     self.down3 = torch.utils.checkpoint(self.down3)
+    #     self.down4 = torch.utils.checkpoint(self.down4)
+    #     self.up1 = torch.utils.checkpoint(self.up1)
+    #     self.up2 = torch.utils.checkpoint(self.up2)
+    #     self.up3 = torch.utils.checkpoint(self.up3)
+    #     self.up4 = torch.utils.checkpoint(self.up4)
+    #     self.outc = torch.utils.checkpoint(self.outc)
