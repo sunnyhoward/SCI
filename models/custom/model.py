@@ -53,6 +53,8 @@ class fourier_denoiser(nn.Module):
         '''
         Input: the measurement - (batch_size, nx, ny)
         '''
+
+        #first id like to add some convolution to the original measurement (and to the kernel).
         
         x = self.data_term(x)   
         x = self.crop(x)
@@ -97,7 +99,7 @@ class CG_UNet(nn.Module):
 
             self.gates_up.append(CoordGate(3, 64, clist[n_levels-1 -i]//factor, size=sizes[n_levels-1 -i])) #coordgate comes before the upsample.
             self.ups.append(Up(clist[n_levels-1-i], clist[n_levels-1 -i-1]//factor, bilinear,BN=BN))
-            size = size//2
+            size = torch.div(size, 2, rounding_mode='floor')
 
 
 

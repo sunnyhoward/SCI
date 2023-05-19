@@ -1,20 +1,55 @@
-train called: model=fourier_denoiser, opt=Adam(lr=0.000500), epochs=15, device=cuda
+train called: model=fourier_denoiser, opt=Adam(lr=0.000500), epochs=50, device=0                                                                        
 
-Epoch 1/15: (74/74), train loss: 0.0010786, val_loss = 0.00025127
-Epoch 2/15: (74/74), train loss: 0.00024505, val_loss = 0.00024921
-Epoch 3/15: (74/74), train loss: 0.00024397, val_loss = 0.00024762
-Epoch 4/15: (74/74), train loss: 0.00021467, val_loss = 0.00014166
-Epoch 5/15: (74/74), train loss: 8.1518e-05, val_loss = 5.9342e-05
-Epoch 6/15: (74/74), train loss: 4.754e-05, val_loss = 4.6861e-05
-Epoch 7/15: (74/74), train loss: 3.993e-05, val_loss = 4.2323e-05
-Epoch 8/15: (74/74), train loss: 3.5861e-05, val_loss = 4.1159e-05
-Epoch 9/15: (74/74), train loss: 3.3099e-05, val_loss = 3.5886e-05
-Epoch 10/15: (74/74), train loss: 3.109e-05, val_loss = 3.6865e-05
-Epoch 11/15: (74/74), train loss: 2.9699e-05, val_loss = 3.2849e-05
-Epoch 12/15: (74/74), train loss: 2.9161e-05, val_loss = 3.6744e-05
-Epoch 13/15: (74/74), train loss: 2.916e-05, val_loss = 3.1029e-05
-Epoch 14/15: (74/74), train loss: 2.6881e-05, val_loss = 3.0993e-05
-Epoch 15/15: (74/74), train loss: 2.6424e-05, val_loss = 3.0358e-05
+Epoch 1/50: (1199/1199), train loss: 0.00011853, val_loss = 2.477e-05                                                                          [44/1861]
+Epoch 2/50: (1199/1199), train loss: 2.2267e-05, val_loss = 1.9038e-05                                                                                  
+Epoch 3/50: (1199/1199), train loss: 1.8405e-05, val_loss = 1.9473e-05                                                                                  
+Epoch 4/50: (1199/1199), train loss: 1.5381e-05, val_loss = 1.3836e-05                                                                                  
+Epoch 5/50: (1199/1199), train loss: 1.2511e-05, val_loss = 1.1795e-05                                                                                  
+Epoch 6/50: (1199/1199), train loss: 1.0347e-05, val_loss = 8.3194e-06                                                                                  
+Epoch 7/50: (1199/1199), train loss: 8.4869e-06, val_loss = 8.6834e-06                                                                                  
+Epoch 8/50: (1199/1199), train loss: 7.2625e-06, val_loss = 6.4e-06                                                                                     
+Epoch 9/50: (1199/1199), train loss: 6.5003e-06, val_loss = 1.1491e-05                                                                                  
+Epoch 10/50: (1199/1199), train loss: 5.5883e-06, val_loss = 5.441e-06                                                                                  
+Epoch 11/50: (1199/1199), train loss: 5.3034e-06, val_loss = 5.0942e-06                                                                        [34/1861]
+Epoch 12/50: (1199/1199), train loss: 5.0723e-06, val_loss = 5.1793e-06                                                                                 
+Epoch 13/50: (1199/1199), train loss: 4.666e-06, val_loss = 5.4126e-06                                                                                  
+Epoch 14/50: (1199/1199), train loss: 4.4035e-06, val_loss = 3.7331e-06                                                                                 
+Epoch 15/50: (1199/1199), train loss: 4.5607e-06, val_loss = 4.4903e-06                                                                                 
+Epoch 16/50: (1199/1199), train loss: 3.9262e-06, val_loss = 5.4554e-06                                                                                 
+Epoch 17/50: (1199/1199), train loss: 3.9051e-06, val_loss = 4.2901e-06                                                                                 
+Epoch 18/50: (1199/1199), train loss: 3.6269e-06, val_loss = 3.8763e-06                                                                                 
+Epoch 19/50: (1199/1199), train loss: 3.6047e-06, val_loss = 3.3415e-06                                                                                 
+Epoch 20/50: (1199/1199), train loss: 3.4493e-06, val_loss = 3.3669e-06                                                                                 
+Epoch 21/50: (1199/1199), train loss: 3.2797e-06, val_loss = 3.5563e-06
+Epoch 22/50: (1199/1199), train loss: 3.1951e-06, val_loss = 3.275e-06                                                                         [23/1861]
+Epoch 23/50: (1199/1199), train loss: 3.2742e-06, val_loss = 2.7035e-06                                                                                 
+Epoch 24/50: (1199/1199), train loss: 2.7898e-06, val_loss = 2.7491e-06                                                                                 
+Epoch 25/50: (1199/1199), train loss: 2.9142e-06, val_loss = 2.4001e-06                                                                                 
+Epoch 26/50: (1199/1199), train loss: 2.7974e-06, val_loss = 3.5334e-06                                                                                 
+Epoch 27/50: (1199/1199), train loss: 2.638e-06, val_loss = 2.575e-06                                                                                   
+Epoch 28/50: (1199/1199), train loss: 2.7117e-06, val_loss = 2.3366e-06                                                                                 
+Epoch 29/50: (1199/1199), train loss: 2.4843e-06, val_loss = 2.9512e-06                                                                                 
+Epoch 30/50: (1199/1199), train loss: 2.4678e-06, val_loss = 2.9383e-06                                                                                 
+Epoch 31/50: (1199/1199), train loss: 2.4266e-06, val_loss = 3.5371e-06                                                                                 
+Epoch 32/50: (1199/1199), train loss: 2.4213e-06, val_loss = 2.0743e-06
+Epoch 33/50: (1199/1199), train loss: 2.373e-06, val_loss = 2.4445e-06                                                                         [12/1861]
+Epoch 34/50: (1199/1199), train loss: 2.2541e-06, val_loss = 1.9749e-06                                                                                 
+Epoch 35/50: (1199/1199), train loss: 2.2697e-06, val_loss = 2.2147e-06                                                                                 
+Epoch 36/50: (1199/1199), train loss: 2.2204e-06, val_loss = 2.2759e-06                                                                                 
+Epoch 37/50: (1199/1199), train loss: 2.0859e-06, val_loss = 2.4925e-06                                                                                 
+Epoch 38/50: (1199/1199), train loss: 2.163e-06, val_loss = 2.6565e-06                                                                                  
+Epoch 39/50: (1199/1199), train loss: 2.045e-06, val_loss = 1.8296e-06                                                                                  
+Epoch 40/50: (1199/1199), train loss: 2.0322e-06, val_loss = 2.1735e-06                                                                                 
+Epoch 41/50: (1199/1199), train loss: 2.1331e-06, val_loss = 1.7287e-06                                                                                 
+Epoch 42/50: (1199/1199), train loss: 1.9731e-06, val_loss = 1.6958e-06                                                                                 
+Epoch 43/50: (1199/1199), train loss: 1.8722e-06, val_loss = 1.6232e-06
+Epoch 44/50: (1199/1199), train loss: 1.9035e-06, val_loss = 1.6076e-06                                                                         [1/1861]
+Epoch 45/50: (1199/1199), train loss: 1.822e-06, val_loss = 1.9293e-06                                                                                  
+Epoch 46/50: (1199/1199), train loss: 1.9277e-06, val_loss = 2.8159e-06
+Epoch 47/50: (1199/1199), train loss: 1.7883e-06, val_loss = 1.806e-06
+Epoch 48/50: (1199/1199), train loss: 1.9375e-06, val_loss = 2.0412e-06
+Epoch 49/50: (1199/1199), train loss: 1.6715e-06, val_loss = 1.7611e-06
+Epoch 50/50: (1199/1199), train loss: 1.885e-06, val_loss = 2.0226e-06
 
-Time total:     434.93 sec
-Time per epoch: 29.00 sec
+Time total:     25965.37 sec
+Time per epoch: 519.31 sec

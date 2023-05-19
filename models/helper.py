@@ -125,7 +125,7 @@ class SyntheticDataset(Dataset):
     Generate data for training by taking an undispersed cube, dispersing it and applying spectral modulation.
 
             Parameters:
-                    undispersed_cube (array)
+                    undispersed_cube (array): This should really be the imaged mask cube
                     shift_info (dict): contains either dispersion array or kernel.
                     spectra (array): the spectral modulation information from fts
 
@@ -152,17 +152,38 @@ class SyntheticDataset(Dataset):
 
     def __getitem__(self, index):
 
-        x = self.data * self.spectra[:,index].permute(1,0).unsqueeze(-1).unsqueeze(-1) # Convert data to a PyTorch tensor
+        x = self.spatiotemporal_mult(self.data, index)
 
-        y = self.sensing_function(torch.ones_like(x),x,shift_info=self.shift_info)  # Convert labels to a PyTorch tensor
+        y = self.sensing_function(torch.ones_like(x),x,shift_info=self.shift_info) 
         
-        # y = y.unsqueeze(1)
         if self.crop:
             nx,ny = x.shape[2:]
-
             x = x[...,nx//2 - 320 : nx//2+320,ny//2 - 320 : ny//2+320]
         
         return y, x
+    
+
+    def spatiotemporal_mult(self, mask_cube, index, type = 'spectra'):
+        '''
+        Take the relay-imaged mask_cube (bs,nc,nx,ny) and multiply it by some spatiotemporal map. 
+
+        type: 'spectra' or 'seperable' or 'spatiotemporal'
+        '''
+        nx,ny = mask_cube.shape[2:]
+
+
+        if type == 'spectra':
+            x = mask_cube * self.spectra[:,index].permute(1,0).unsqueeze(-1).unsqueeze(-1)
+
+        elif type == 'seperable': #not implemented yet
+            x = mask_cube * self.spectra[:,index].permute(1,0).unsqueeze(-1).unsqueeze(-1) 
+            #... x[...,nx//2 - 320 : nx//2+320,ny//2 - 320 : ny//2+320] = x[...,nx//2 - 320 : nx//2+320,ny//2 - 320 : ny//2+320] * self.spatial_intensity[
+
+        elif type == 'spatiotemporal':
+            x = mask_cube[...,nx//2 - 320 : nx//2+320,ny//2 - 320 : ny//2+320] * self.spatiotemporal[index] #not really implemented yet either.
+
+        return x
+        
 
 
 

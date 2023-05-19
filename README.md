@@ -4,15 +4,19 @@ In this repo we work on the task of going from the image captured on the sensor 
 
 For each copy, we can potentially try and first un-integrate and un-disperse that copy, but maintaining the blur from dispersion. Then we will put the cubes together and unblur later. 
 
+
 ## Models
-The ML models and the helper functions
+The ML models and the helper functions.
+- Right now, the undispersed cube contains some spatially varying spectral modulation already. 
 - Implement Wiener deconvolution instead of just division. I also like the idea of making the fourier-kernel trainable.
 - Maybe make a model to analyse each copy separately, before bringing them together. 
+
 
 ## Forward
 The forward models.
 - Try and get padding working with the Fourier method.
 - Get normalization working in calc_psiT_g. 
+- The Mask needs to be made correctly.
 
 
 ## Other Qs
@@ -20,4 +24,3 @@ The forward models.
 #### Training
 - It should be easy to overfit the training data position. Right now we are not. 
 - I suspect there is some CUDA torch memory inefficiency. 
-
