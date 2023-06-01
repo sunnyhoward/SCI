@@ -5,16 +5,19 @@ import forward as fwd
 import time
 import numpy as np
 
-def train(model, optimizer, loss_fn, train_dl, val_dl, epochs=100, device='gpu'):
+def train(model, optimizer, loss_fn, train_dl, val_dl, epochs=100, device='cuda'):
     '''
     The function to train a model.
 
     @TODO: Add the ability to redirect the print statements to the model_results.txt file.
     '''
 
+    model_name = type(model).__name__
+    lr = optimizer.param_groups[0]['lr']
+
     print('train called: model=%s, opt=%s(lr=%f), epochs=%d, device=%s\n' % \
-          (type(model).__name__, type(optimizer).__name__,
-           optimizer.param_groups[0]['lr'], epochs, device))
+          (model_name, type(optimizer).__name__,
+           lr, epochs, device))
 
     history = {} # Collects per-epoch loss and acc like Keras' fit().
     history['loss'] = []
@@ -85,6 +88,12 @@ def train(model, optimizer, loss_fn, train_dl, val_dl, epochs=100, device='gpu')
     print('Time total:     %5.2f sec' % (total_time_sec))
     print('Time per epoch: %5.2f sec' % (time_per_epoch_sec))
 
+    with open('model_results.txt', 'a') as file:
+        file.write(f'model={model_name}, lr = {lr}, epochs = {epochs}\n')
+        file.write(f'time total: {total_time_sec}, time per epoch: {time_per_epoch_sec}\n')
+        file.write(f'history: {history}\n')
+        file.write('\n\n\n')
+
     return history
 
 
@@ -107,10 +116,6 @@ class CustomDataLoader:
 
         for batch_start in range(0, len(indices), self.batch_size):
             batch_indices = indices[batch_start:batch_start + self.batch_size]
-
-            # batch_data = [list(self.dataset[idx]) for idx in batch_indices]
-            # batch = list(zip(*batch_data))
-            # x,y = torch.cat(batch[0]),torch.cat(batch[1])
 
             x,y = self.dataset[batch_indices]
             yield x,y
@@ -152,9 +157,9 @@ class SyntheticDataset(Dataset):
 
     def __getitem__(self, index):
 
-        x = self.spatiotemporal_mult(self.data, index)
+        x = self.spatiotemporal_mult(self.data, index) #apply a modulation to the cube
 
-        y = self.sensing_function(torch.ones_like(x),x,shift_info=self.shift_info) 
+        y = self.sensing_function(torch.ones_like(x),x,shift_info=self.shift_info) #measure it
         
         if self.crop:
             nx,ny = x.shape[2:]
@@ -186,6 +191,48 @@ class SyntheticDataset(Dataset):
         
 
 
+class FTSDataset(Dataset):
+    '''
+    Here we generate data from the real FTS measurements. 
+
+            Parameters:
+                    undispersed_cube (array): This should really be the imaged mask cube
+                    spectra (array): the spectral modulation information from fts
+
+            Returns:
+                    (array): undispersed, unintegrated cube
+    '''
+    def __init__(self, undispersed_cube, spectra, crop=True):
+        super(FTSDataset, self).__init__()
+
+        self.undispersed_cube = undispersed_cube
+        self.spectra = spectra
+        self.crop = crop    
+        self.set_batch()
+        self.dir = '/project/agdoepp/Experiment/Hyperspectral_Calibration_FTS/20230522_mask_2gratings_data_talbot_0_15000us/'
+        self.positions = np.load(self.dir+'/positions.npy')
+
+
+    def set_batch(self,batch=2):
+        self.batch = batch
+        self.data = torch.tile(self.undispersed_cube,(batch,1,1,1))
+
+    def __len__(self):
+        return len(self.spectra[0])
+
+    def __getitem__(self, index):
+
+        x = self.data * self.spectra[:,index].permute(1,0).unsqueeze(-1).unsqueeze(-1)
+        y = torch.stack([torch.from_numpy(np.load(self.dir + 'piezopos_' + str(i) + '.npy').astype(np.float32)/ 4096) for i in self.positions[index]],dim = 0) 
+
+        if self.crop:
+            nx,ny = x.shape[2:]
+            x = x[...,nx//2 - 320 : nx//2+320,ny//2 - 320 : ny//2+320]
+        
+        return y, x
+    
+
+
 
 
 class HDF5Dataset(Dataset):
@@ -207,31 +254,44 @@ class HDF5Dataset(Dataset):
 
 
 
-def create_bs_data(desired_channels,interp_type='nearest'):
+
+###########################################################################################
+
+
+def create_bs_data(desired_channels,dir = '20230522_mask_2gratings_data_talbot_0_15000us', interp_type='nearest',device='cuda'):
     '''
     This is ugly so put it in a function. 
 
     Calling this function will yield the undispersed cube, the dispersed mask and the FTS spectra.
     '''
     ###load the cube###
-    anadir = '/project/agdoepp/Experiment/Hyperspectral_Calibration_FTS/20230508_mask_analysis_talbot_0_300us/'
-    datadir = '/project/agdoepp/Experiment/Hyperspectral_Calibration_FTS/20230508_mask_data_talbot_0_300us'
+    anasubdir = dir.split('data')
+    anasubdir = anasubdir[0] + 'analysis' + anasubdir[1]
+
+    anadir = '/project/agdoepp/Experiment/Hyperspectral_Calibration_FTS/'+anasubdir + '/'
+    datadir = '/project/agdoepp/Experiment/Hyperspectral_Calibration_FTS/'+dir + '/'
     signalfft_center = np.load(anadir+'signalfft_padded_center.npy')
     signalfft_left = np.load(anadir+'signalfft_padded_left.npy')
     signalfft_right = np.load(anadir+'signalfft_padded_right.npy')
     undisp_cube = np.concatenate((signalfft_left,signalfft_center,signalfft_right),axis = 1) 
     
     ###load the mask and FTS spectra###
-    spectras = np.load(datadir+'/spectra.npy') 
-    mask = torch.tensor(np.load(anadir+'/dispersed_mask.npy')).float().to('cuda') #this needs changing also as I just made it by thresholding data.
+    spectras = np.load(datadir+'spectra.npy') 
 
     ###interpolate to desired channels###
     undisp_cube = interpolate_signal(undisp_cube, desired_channels, index_axis = 2, interp_type=interp_type) #interpolate to 750-850nm
     spectras = interpolate_signal(spectras, desired_channels, index_axis = 0, interp_type=interp_type) #interpolate to 750-850nm
+    try:
+        mask = torch.tensor(np.load(anadir+'dispersed_mask.npy')).float().to(device) #this needs changing also as I just made it by thresholding data.
+    except:
+        mask = undisp_cube > 0.1 * undisp_cube.max() #this is a hack.
+        mask = np.transpose(mask[np.newaxis],(0,3,1,2))
+        np.save(anadir+'dispersed_mask.npy',mask)
+        mask = torch.tensor(mask).to(device)
 
     ###normalize and send to cuda###
-    undisp_cube = torch.tensor(normalize(undisp_cube)).float().permute(2,0,1).unsqueeze(0).to('cuda')
-    spectras = torch.tensor(normalize(spectras)).float().to('cuda')
+    undisp_cube = torch.tensor(normalize(undisp_cube)).float().permute(2,0,1).unsqueeze(0).to(device)
+    spectras = torch.tensor(normalize(spectras)).float().to(device)
 
     return undisp_cube, mask, spectras
 

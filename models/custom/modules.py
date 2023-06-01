@@ -3,13 +3,14 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class CoordGate(nn.Module):
-    def __init__(self, encoding_layers, enc_channels, out_channels, size:list=[256,256]):
+    def __init__(self, encoding_layers, enc_channels, out_channels, size:list=[256,256],device='cuda'):
         super(CoordGate, self).__init__()
 
         x_coord, y_coord = torch.linspace(-1,1,int(size[0])), torch.linspace(-1,1,int(size[1]))
 
-        self.pos = torch.stack(torch.meshgrid((x_coord,y_coord), indexing='ij'), dim=-1).view(-1,2).to('cuda')
-
+        # self.pos = torch.stack(torch.meshgrid((x_coord,y_coord), indexing='ij'), dim=-1).view(-1,2).to(device)
+        self.register_buffer('pos', torch.stack(torch.meshgrid((x_coord,y_coord), indexing='ij'), dim=-1).view(-1,2))#.to(device)
+        
 
         self.encoder = nn.Sequential()
         for i in range(encoding_layers):
