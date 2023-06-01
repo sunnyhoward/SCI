@@ -2,16 +2,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import time
-# import os
-# import sys
-# main_dir = os.path.dirname(os.path.abspath('../'))
-# sys.path.insert(0, main_dir)
-
+import numpy as np
 from forward.fourier.method import calc_psiT_g
 from models.backbone.unet.modules import *
 from models.backbone.unet.model import *
 from models.custom.modules import *
-
 
 
 class fourier_denoiser(nn.Module):
@@ -20,13 +15,26 @@ class fourier_denoiser(nn.Module):
     Input: mask - the predispersed mask-cube (bs,nc,nx,ny)
     """
 
-    def __init__(self, mask, kernel, CoordGate=True, ):
+    def __init__(self, mask, kernel, CoordGate=True, trainable_kernel=False):
         super().__init__()
 
+        self.trainable_kernel = trainable_kernel
+        self.kernel = kernel
+
+        if trainable_kernel:
+            
+            locations = np.array([[[3,2039,1315,630,640,1320,630,1310],[10,2046,1420,730,740,1420,730,1410]], [[850,1450,8,2433,850,880,1440,1465],[1000,1590,16,2440,980,1010,1570,1595]]])
+            locations = locations[...,:1]
+
+            self.locations = locations
+
+            variable_kernel = []
+            for i in range(locations.shape[-1]):
+                # self.kernel[0,:,locations[0,0,i]:locations[0,1,i],locations[1,0,i]:locations[1,1,i]] = nn.Parameter(kernel[0,:,locations[0,0,i]:locations[0,1,i],locations[1,0,i]:locations[1,1,i]]) 
+                variable_kernel.append(nn.Parameter(kernel[0,:,locations[0,0,i]:locations[0,1,i],locations[1,0,i]:locations[1,1,i]]))
+                # kernel_mask[0,:,locations[0,0,i]:locations[0,1,i],locations[1,0,i]:locations[1,1,i]] = 1 
+            self.variable_kernel = variable_kernel
         
-        self.kernel = kernel #nn.Parameter(kernel, requires_grad =True) #maybe not necessary    
-        self.shift_info = {'kernel':self.kernel}
-    
         self.mask = mask
         
         self.cropsize = 640//2
@@ -39,8 +47,21 @@ class fourier_denoiser(nn.Module):
 
 
     def data_term(self,x):
+        kernel = self.fill_kernel()
+        self.shift_info = {'kernel':kernel}
         x = calc_psiT_g(self.mask, x, self.shift_info) #(bs,nc,nx,ny)
         return x
+    
+
+    def fill_kernel(self):
+        if self.trainable_kernel:
+            kernel = torch.zeros_like(self.kernel)
+            locations = self.locations
+            for i in range(locations.shape[-1]):
+                kernel[0,:,locations[0,0,i]:locations[0,1,i],locations[1,0,i]:locations[1,1,i]] = self.variable_kernel[i]
+        else:
+            kernel = self.kernel
+        return kernel
 
 
     def crop(self,x):
@@ -64,9 +85,48 @@ class fourier_denoiser(nn.Module):
 
 
 
+class crop_denoiser(nn.Module):
+    """
+    In this model we pass the measurement (9 copies) through a simple cnn, then we do the fourier deconvolution, before cropping and putting the output through a denoising UNet (w/ CoordGate).
+    Input: mask - the predispersed mask-cube (bs,nc,nx,ny)
+    """
+
+    def __init__(self, mask, CoordGate=True):
+        super().__init__()
+
+        self.mask = mask
+        self.cropsize = 640//2
+
+        if CoordGate:
+            self.unet = CG_UNet(21,21, n_levels=5, init_size=[self.cropsize*2,self.cropsize*2])
+        else:
+            self.unet = UNet(21,21, n_levels=5)
+
+
+
+    def crop(self,x):
+        nx,ny = x.shape[2:]
+        return x[...,nx//2 - self.cropsize : nx//2+self.cropsize,ny//2 - self.cropsize : ny//2+self.cropsize]
+
+        
+
+    def forward(self, x):
+        '''
+        Input: the measurement - (batch_size, nx, ny)
+        '''
+
+        #first id like to add some convolution to the original measurement (and to the kernel).
+        x = self.mask * torch.tile(x.unsqueeze(1),(1,21,1,1))
+        x = self.crop(x)
+        x = self.unet(x)
+
+        return x
+
+
+
 
 class CG_UNet(nn.Module):
-    def __init__(self, n_channels, n_classes, n_levels, bilinear=False, BN=False, init_size = [640,640]):
+    def __init__(self, n_channels, n_classes, n_levels, bilinear=False, BN=False, init_size = [640,640],device='cuda'):
         super(CG_UNet, self).__init__()
         self.n_channels = n_channels
         self.n_classes = n_classes
