@@ -20,7 +20,7 @@ def calc_psi_z(psi,z,shift_info):
     return torch.sum(psi*z_disp,axis=1)
 
 
-def calc_psiT_g(psi, g, shift_info, normalize=False): #@TODO: Normalize is broken
+def calc_psiT_g(psi, g, shift_info,  wiener=True, lamb=0.1, normalize=False): #@TODO: Normalize is broken
     '''
     Transpose of the sensing process.
 
@@ -44,7 +44,7 @@ def calc_psiT_g(psi, g, shift_info, normalize=False): #@TODO: Normalize is broke
 
     cube = psi * torch.tile(g.unsqueeze(1),(1,nc,1,1))
 
-    cube_disp = disperser.undisperse_all_orders(cube,kernel)
+    cube_disp = disperser.undisperse_all_orders(cube,kernel,wiener=wiener,lamb=lamb)
 
     return cube_disp
 
@@ -62,9 +62,7 @@ class disperser:
         f_cube = torch.fft.fft2(cube)
         f_kernel = torch.fft.fft2(kernel)
         f_cube_disp = f_cube * f_kernel
-        cube_disp = torch.fft.ifft2(f_cube_disp)
-
-        cube_disp = cube_disp.abs() #or abs?
+        cube_disp = torch.real(torch.fft.ifft2(f_cube_disp)) #or abs?
 
         if pad:
             cube_disp = cube_disp[:,:,pad_x:-pad_x,pad_y:-pad_y]
@@ -72,7 +70,7 @@ class disperser:
     
 
     @staticmethod
-    def undisperse_all_orders(cube, kernel, pad=False): # @TODO Why does padding break? 
+    def undisperse_all_orders(cube, kernel, wiener = False, pad=False, **kwargs): # @TODO Why does padding break? 
         nx,ny = cube.shape[2:]
         if pad:
             pad_x = int(np.ceil(nx/2))
@@ -82,10 +80,15 @@ class disperser:
 
         f_cube = torch.fft.fft2(cube)
         f_kernel = torch.fft.fft2(kernel)
-        f_cube_undisp = f_cube / f_kernel
-        cube_undisp = torch.fft.ifft2(f_cube_undisp)
 
-        cube_undisp = cube_undisp.abs() #or abs?
+        if wiener:
+            lamb = kwargs['lamb']
+            f_cube_undisp=(torch.conj(f_kernel)*f_cube)/ (torch.square(torch.abs(f_kernel))+ lamb)#, dtype=tf.complex64)
+        else:
+            f_cube_undisp = f_cube / f_kernel
+
+        cube_undisp=torch.real((torch.fft.ifft2(f_cube_undisp))) #or abs
+
 
         if pad:
             cube_undisp = cube_undisp[:,:,pad_x:-pad_x,pad_y:-pad_y]
