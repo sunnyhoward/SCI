@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import numpy as np
 
 class CoordGate(nn.Module):
     def __init__(self, encoding_layers, enc_channels, out_channels, size:list=[256,256],device='cuda'):
@@ -34,3 +35,60 @@ class CoordGate(nn.Module):
         x = x * encoded_pos
 
         return self.conv(x)
+
+
+
+
+def findclusters(kernel, padding = 4, verbose = False):
+    '''
+    This function identifies the regions of the kernel that will be made trainable
+    '''
+    sx,sy = kernel.shape[2:]
+
+    a = torch.sum(kernel[0].detach().cpu(),dim=0)
+    x,y = np.where(a>0)
+
+    xclusters = []
+    xstart = x[0]
+    for i in range(1,len(x)):
+        if np.abs(x[i] - x[i-1]) > 10:
+            xclusters.append((xstart,x[i-1]))
+            xstart = x[i]
+    xclusters.append((xstart,x[-1]))
+
+
+    # now for each x cluster, how many y clusters do we have?
+    clusters = np.zeros((2,2,9),dtype=int)
+    n = 0
+
+    for xcluster in xclusters:
+        cond = (x>=xcluster[0]) & (x<=xcluster[1])
+        yvalues = y[cond]
+        yvalues = np.sort(yvalues)
+        ystart = yvalues[0] #the beginning of the cluster
+        for i in range(len(yvalues)-1):
+            if np.abs(yvalues[i+1] - yvalues[i]) > 10: #if the next point is more than 10 away.
+                ycluster = (ystart,yvalues[i]) #save the cluster
+                if verbose:
+                    print(xcluster, ycluster)
+                
+                clusters[0,0,n] = xcluster[0] - padding if xcluster[0] - padding >= 0 else 0
+                clusters[0,1,n] = xcluster[1] + padding if xcluster[1] + padding <= sx-1 else sx-1
+                clusters[1,0,n] = ycluster[0] - padding if ycluster[0] - padding >= 0 else 0
+                clusters[1,1,n] = ycluster[1] + padding if ycluster[1] + padding <= sy-1 else sy-1
+                n += 1
+
+                ystart = yvalues[i+1] #the beginning of the next cluster
+
+        ycluster = (ystart,yvalues[i+1])
+        if verbose:
+            print(xcluster, ycluster)
+
+        clusters[0,0,n] = xcluster[0] - padding if xcluster[0] - padding >= 0 else 0
+        clusters[0,1,n] = xcluster[1] + padding if xcluster[1] + padding <= sx-1 else sx-1
+        clusters[1,0,n] = ycluster[0] - padding if ycluster[0] - padding >= 0 else 0
+        clusters[1,1,n] = ycluster[1] + padding if ycluster[1] + padding <= sy-1 else sy-1
+        n += 1
+        # print(n)
+
+    return  clusters

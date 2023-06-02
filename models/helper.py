@@ -12,7 +12,7 @@ def train(model, optimizer, loss_fn, train_dl, val_dl, epochs=100, device='cuda'
     @TODO: Add the ability to redirect the print statements to the model_results.txt file.
     '''
 
-    model_name = type(model).__name__
+    model_name = model.name
     lr = optimizer.param_groups[0]['lr']
 
     print('train called: model=%s, opt=%s(lr=%f), epochs=%d, device=%s\n' % \
@@ -31,6 +31,7 @@ def train(model, optimizer, loss_fn, train_dl, val_dl, epochs=100, device='cuda'
 
     for epoch in range(1, epochs+1):
         # --- TRAIN AND EVALUATE ON TRAINING SET -----------------------------
+        start_time_sec = time.time()
         model.train()
         train_loss         = 0.0
         num_train_examples = 0
@@ -74,23 +75,19 @@ def train(model, optimizer, loss_fn, train_dl, val_dl, epochs=100, device='cuda'
 
             val_loss = val_loss / len(val_dl.indexes)
 
+        end_time_sec       = time.time()
+        total_time_sec     = end_time_sec - start_time_sec
 
-        print(f'Epoch {epoch}/{epochs}: ({total_batches}/{total_batches}), train loss: {train_loss:5.5g}, val_loss = {val_loss:5.5g}')
+        print(f'Epoch {epoch}/{epochs}: ({total_batches}/{total_batches}), train loss: {train_loss:5.5g}, val_loss = {val_loss:5.5g},  epoch time: {total_time_sec:5.5g}')
 
 
         history['loss'].append(train_loss)
         history['val_loss'].append(val_loss)
 
-    end_time_sec       = time.time()
-    total_time_sec     = end_time_sec - start_time_sec
-    time_per_epoch_sec = total_time_sec / epochs
-    print()
-    print('Time total:     %5.2f sec' % (total_time_sec))
-    print('Time per epoch: %5.2f sec' % (time_per_epoch_sec))
-
+        
     with open('model_results.txt', 'a') as file:
         file.write(f'model={model_name}, lr = {lr}, epochs = {epochs}\n')
-        file.write(f'time total: {total_time_sec}, time per epoch: {time_per_epoch_sec}\n')
+        file.write(f'epoch time: {total_time_sec}\n')
         file.write(f'history: {history}\n')
         file.write('\n\n\n')
 
@@ -255,15 +252,27 @@ class HDF5Dataset(Dataset):
 
 
 
+
+
+
+
 ###########################################################################################
 
 
-def create_bs_data(desired_channels,dir = '20230522_mask_2gratings_data_talbot_0_15000us', interp_type='nearest',device='cuda'):
+def create_bs_data(desired_channels, kernel, dir = '20230522_mask_2gratings_data_talbot_0_15000us', interp_type='nearest', crop_cube = False, device='cuda'):
     '''
     This is ugly so put it in a function. 
 
     Calling this function will yield the undispersed cube, the dispersed mask and the FTS spectra.
+
+    desired_channels is the number of channels you want to interpolate to.
+    kernel is the kernel to disperse with.
+    dir is the directory of the data.
+    interp_type is the type of interpolation. Can be 'nearest'(fast) or 'average'(slow)
+    crop_cube is whether to crop the cube to 640x640 or not (useful when we have a 9 copy fts data.)
     '''
+    print('collecting the undispersed cube and spectra.')
+
     ###load the cube###
     anasubdir = dir.split('data')
     anasubdir = anasubdir[0] + 'analysis' + anasubdir[1]
@@ -281,19 +290,32 @@ def create_bs_data(desired_channels,dir = '20230522_mask_2gratings_data_talbot_0
     ###interpolate to desired channels###
     undisp_cube = interpolate_signal(undisp_cube, desired_channels, index_axis = 2, interp_type=interp_type) #interpolate to 750-850nm
     spectras = interpolate_signal(spectras, desired_channels, index_axis = 0, interp_type=interp_type) #interpolate to 750-850nm
+
+    if crop_cube:
+        zeros = np.zeros_like(undisp_cube)
+        sx,sy = undisp_cube.shape[:2]
+        zeros[sx//2 - 320 : sx//2+320,sy//2 - 320 : sy//2+320] = undisp_cube[sx//2 - 320 : sx//2+320,sy//2 - 320 : sy//2+320]
+        undisp_cube = zeros
+
     try:
-        mask = torch.tensor(np.load(anadir+'dispersed_mask.npy')).float().to(device) #this needs changing also as I just made it by thresholding data.
+        dispersed_mask = torch.tensor(np.load(anadir+'dispersed_mask.npy')).float().to(device) #this needs changing also as I just made it by thresholding data.
     except:
+        print('no mask found, creating one.')
         mask = undisp_cube > 0.1 * undisp_cube.max() #this is a hack.
         mask = np.transpose(mask[np.newaxis],(0,3,1,2))
-        np.save(anadir+'dispersed_mask.npy',mask)
-        mask = torch.tensor(mask).to(device)
+
+        mask = torch.tensor(mask)
+        dispersed_mask = torch.abs(fwd.fourier.method.disperser.disperse_all_orders(mask,kernel))
+        dispersed_mask[dispersed_mask<0.01] = 0
+
+        np.save(anadir+'dispersed_mask.npy',dispersed_mask.numpy())
+        dispersed_mask = torch.tensor(dispersed_mask).to(device)
 
     ###normalize and send to cuda###
     undisp_cube = torch.tensor(normalize(undisp_cube)).float().permute(2,0,1).unsqueeze(0).to(device)
     spectras = torch.tensor(normalize(spectras)).float().to(device)
 
-    return undisp_cube, mask, spectras
+    return undisp_cube, dispersed_mask, spectras
 
 
 
