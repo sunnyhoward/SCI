@@ -39,56 +39,107 @@ class CoordGate(nn.Module):
 
 
 
-def findclusters(kernel, padding = 4, verbose = False):
+def findclusters(kernel, padding = 4, type = 'nearest_neighbour', verbose = False):
     '''
     This function identifies the regions of the kernel that will be made trainable
+    type is boxes or nearest_neighbour, where a box will draw a box around the cluster of points, and nearest neighbour just surround each point with padding
     '''
-    sx,sy = kernel.shape[2:]
+    
 
-    a = torch.sum(kernel[0].detach().cpu(),dim=0)
-    x,y = np.where(a>0)
+    if type == 'nearest_neighbour':
+        sc,sx,sy = kernel[0].shape
+        c,x,y = np.where(kernel[0].detach().cpu()>0)
+        mask = np.zeros((sc,sx,sy),dtype=bool) #this will be used to index a kernel.
 
-    xclusters = []
-    xstart = x[0]
-    for i in range(1,len(x)):
-        if np.abs(x[i] - x[i-1]) > 10:
-            xclusters.append((xstart,x[i-1]))
-            xstart = x[i]
-    xclusters.append((xstart,x[-1]))
+        for i in range(len(x)):
+
+            lb_x = x[i] - padding if x[i] - padding >= 0 else 0
+            ub_x = x[i] + padding if x[i] + padding <= sx-1 else sx-1
+            lb_y = y[i] - padding if y[i] - padding >= 0 else 0
+            ub_y = y[i] + padding if y[i] + padding <= sy-1 else sy-1
+            mask[c,lb_x:ub_x,lb_y:ub_y] = True
+
+    return mask
+        
+        
 
 
-    # now for each x cluster, how many y clusters do we have?
-    clusters = np.zeros((2,2,9),dtype=int)
-    n = 0
+    # elif type == 'boxes':
 
-    for xcluster in xclusters:
-        cond = (x>=xcluster[0]) & (x<=xcluster[1])
-        yvalues = y[cond]
-        yvalues = np.sort(yvalues)
-        ystart = yvalues[0] #the beginning of the cluster
-        for i in range(len(yvalues)-1):
-            if np.abs(yvalues[i+1] - yvalues[i]) > 10: #if the next point is more than 10 away.
-                ycluster = (ystart,yvalues[i]) #save the cluster
-                if verbose:
-                    print(xcluster, ycluster)
-                
-                clusters[0,0,n] = xcluster[0] - padding if xcluster[0] - padding >= 0 else 0
-                clusters[0,1,n] = xcluster[1] + padding if xcluster[1] + padding <= sx-1 else sx-1
-                clusters[1,0,n] = ycluster[0] - padding if ycluster[0] - padding >= 0 else 0
-                clusters[1,1,n] = ycluster[1] + padding if ycluster[1] + padding <= sy-1 else sy-1
-                n += 1
+    #     sx,sy = kernel.shape[2:]
+    #     a = torch.sum(kernel[0].detach().cpu(),dim=0)
+    #     x,y = np.where(a>0)
 
-                ystart = yvalues[i+1] #the beginning of the next cluster
+    #     xclusters = []
+    #     xstart = x[0]
+    #     for i in range(1,len(x)):
+    #         if np.abs(x[i] - x[i-1]) > 10:
+    #             xclusters.append((xstart,x[i-1]))
+    #             xstart = x[i]
+    #     xclusters.append((xstart,x[-1]))
 
-        ycluster = (ystart,yvalues[i+1])
-        if verbose:
-            print(xcluster, ycluster)
 
-        clusters[0,0,n] = xcluster[0] - padding if xcluster[0] - padding >= 0 else 0
-        clusters[0,1,n] = xcluster[1] + padding if xcluster[1] + padding <= sx-1 else sx-1
-        clusters[1,0,n] = ycluster[0] - padding if ycluster[0] - padding >= 0 else 0
-        clusters[1,1,n] = ycluster[1] + padding if ycluster[1] + padding <= sy-1 else sy-1
-        n += 1
-        # print(n)
+    #     # now for each x cluster, how many y clusters do we have?
+    #     clusters = np.zeros((2,2,9),dtype=int)
+    #     n = 0
 
-    return  clusters
+    #     for xcluster in xclusters:
+    #         cond = (x>=xcluster[0]) & (x<=xcluster[1])
+    #         yvalues = y[cond]
+    #         yvalues = np.sort(yvalues)
+    #         ystart = yvalues[0] #the beginning of the cluster
+    #         for i in range(len(yvalues)-1):
+    #             if np.abs(yvalues[i+1] - yvalues[i]) > 10: #if the next point is more than 10 away.
+    #                 ycluster = (ystart,yvalues[i]) #save the cluster
+    #                 if verbose:
+    #                     print(xcluster, ycluster)
+                    
+    #                 clusters[0,0,n] = xcluster[0] - padding if xcluster[0] - padding >= 0 else 0
+    #                 clusters[0,1,n] = xcluster[1] + padding if xcluster[1] + padding <= sx-1 else sx-1
+    #                 clusters[1,0,n] = ycluster[0] - padding if ycluster[0] - padding >= 0 else 0
+    #                 clusters[1,1,n] = ycluster[1] + padding if ycluster[1] + padding <= sy-1 else sy-1
+    #                 n += 1
+
+    #                 ystart = yvalues[i+1] #the beginning of the next cluster
+
+    #         ycluster = (ystart,yvalues[i+1])
+    #         if verbose:
+    #             print(xcluster, ycluster)
+
+    #         clusters[0,0,n] = xcluster[0] - padding if xcluster[0] - padding >= 0 else 0
+    #         clusters[0,1,n] = xcluster[1] + padding if xcluster[1] + padding <= sx-1 else sx-1
+    #         clusters[1,0,n] = ycluster[0] - padding if ycluster[0] - padding >= 0 else 0
+    #         clusters[1,1,n] = ycluster[1] + padding if ycluster[1] + padding <= sy-1 else sy-1
+    #         n += 1
+    #         # print(n)
+
+    # return  clusters
+
+
+class TVLoss(nn.Module):
+    def __init__(self, mse_weight=1, tv_weight=0.01):
+        super(TVLoss, self).__init__()
+        self.mse_weight = mse_weight
+        self.tv_weight = tv_weight
+
+    def forward(self, prediction, target, model):
+        mse_loss = nn.MSELoss()(prediction, target) 
+
+        var_ker = model.fill_kernel()
+
+        # Calculate the Total Variation (TV) loss
+        tv_loss = self.total_variation_loss(var_ker)
+
+        # Combine the MSE and TV losses
+        loss = self.mse_weight * mse_loss + self.tv_weight * tv_loss
+
+        return loss
+
+    def total_variation_loss(self, x):
+        # Calculate the Total Variation (TV) loss
+        norm = torch.prod(torch.tensor(x.shape))
+        
+        # Calculate the horizontal and vertical gradients
+        tv_loss = ( torch.sum((x[:, :-1, :, :] - x[:, 1:, :, :])**2) + torch.sum((x[:, :,  :-1, :] - x[:, :, 1:, :])**2)  +  torch.sum((x[:, :, :, :-1] - x[:, :, :, 1:])**2) ) / norm
+
+        return tv_loss

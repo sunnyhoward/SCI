@@ -5,6 +5,7 @@ import forward as fwd
 import time
 import numpy as np
 
+
 def train(model, optimizer, loss_fn, train_dl, val_dl, epochs=100, device='cuda'):
     '''
     The function to train a model.
@@ -199,14 +200,14 @@ class FTSDataset(Dataset):
             Returns:
                     (array): undispersed, unintegrated cube
     '''
-    def __init__(self, undispersed_cube, spectra, crop=True):
+    def __init__(self, undispersed_cube, spectra, dir = '20230522_mask_2gratings_data_talbot_0_15000us/', crop=True):
         super(FTSDataset, self).__init__()
 
         self.undispersed_cube = undispersed_cube
         self.spectra = spectra
         self.crop = crop    
         self.set_batch()
-        self.dir = '/project/agdoepp/Experiment/Hyperspectral_Calibration_FTS/20230522_mask_2gratings_data_talbot_0_15000us/'
+        self.dir = '/project/agdoepp/Experiment/Hyperspectral_Calibration_FTS/'+dir
         self.positions = np.load(self.dir+'/positions.npy')
 
 
@@ -228,6 +229,58 @@ class FTSDataset(Dataset):
         
         return y, x
     
+
+
+
+
+
+
+
+
+class KernelLearnerDataset(Dataset):
+    '''
+    Here we generate data from the real FTS measurements. 
+
+            Parameters:
+                    undispersed_cube (array): This should really be the imaged mask cube
+                    spectra (array): the spectral modulation information from fts
+
+            Returns:
+                    (array): undispersed, unintegrated cube
+    '''
+    def __init__(self, undispersed_cube, spectra, dir = '20230522_mask_2gratings_data_talbot_0_15000us/', crop=True):
+        super(KernelLearnerDataset, self).__init__()
+
+        self.undispersed_cube = undispersed_cube
+        self.spectra = spectra
+        self.crop = crop    
+        self.set_batch()
+        self.dir = '/project/agdoepp/Experiment/Hyperspectral_Calibration_FTS/'+dir
+        self.positions = np.load(self.dir+'/positions.npy')
+
+
+    def set_batch(self,batch=2):
+        self.batch = batch
+        self.data = torch.tile(self.undispersed_cube,(batch,1,1,1))
+
+    def __len__(self):
+        return len(self.spectra[0])
+
+    def __getitem__(self, index):
+
+        x = self.data * self.spectra[:,index].permute(1,0).unsqueeze(-1).unsqueeze(-1)
+        y = torch.stack([torch.from_numpy(np.load(self.dir + 'piezopos_' + str(i) + '.npy').astype(np.float32)/ 4096) for i in self.positions[index]],dim = 0) 
+
+        if self.crop:
+            nx,ny = x.shape[2:]
+            x = x[...,nx//2 - 320 : nx//2+320,ny//2 - 320 : ny//2+320]
+        
+        return x,y
+
+
+
+
+
 
 
 
@@ -279,17 +332,14 @@ def create_bs_data(desired_channels, kernel, dir = '20230522_mask_2gratings_data
 
     anadir = '/project/agdoepp/Experiment/Hyperspectral_Calibration_FTS/'+anasubdir + '/'
     datadir = '/project/agdoepp/Experiment/Hyperspectral_Calibration_FTS/'+dir + '/'
-    signalfft_center = np.load(anadir+'signalfft_padded_center.npy')
-    signalfft_left = np.load(anadir+'signalfft_padded_left.npy')
-    signalfft_right = np.load(anadir+'signalfft_padded_right.npy')
-    undisp_cube = np.concatenate((signalfft_left,signalfft_center,signalfft_right),axis = 1) 
     
-    ###load the mask and FTS spectra###
+    ###load the cube and FTS spectra###
+    undisp_cube = load_cube(anadir)
     spectras = np.load(datadir+'spectra.npy') 
 
     ###interpolate to desired channels###
-    undisp_cube = interpolate_signal(undisp_cube, desired_channels, index_axis = 2, interp_type=interp_type) #interpolate to 750-850nm
-    spectras = interpolate_signal(spectras, desired_channels, index_axis = 0, interp_type=interp_type) #interpolate to 750-850nm
+    undisp_cube = interpolate_signal(undisp_cube, desired_channels, interp_axis = 2, interp_type=interp_type) #interpolate to 750-850nm
+    spectras = interpolate_signal(spectras, desired_channels, interp_axis = 0, interp_type=interp_type) #interpolate to 750-850nm
 
     if crop_cube:
         zeros = np.zeros_like(undisp_cube)
@@ -301,12 +351,13 @@ def create_bs_data(desired_channels, kernel, dir = '20230522_mask_2gratings_data
         dispersed_mask = torch.tensor(np.load(anadir+'dispersed_mask.npy')).float().to(device) #this needs changing also as I just made it by thresholding data.
     except:
         print('no mask found, creating one.')
-        mask = undisp_cube > 0.1 * undisp_cube.max() #this is a hack.
+        mask = undisp_cube > 0.05 * undisp_cube.max() #this is a hack.
         mask = np.transpose(mask[np.newaxis],(0,3,1,2))
 
         mask = torch.tensor(mask)
-        dispersed_mask = torch.abs(fwd.fourier.method.disperser.disperse_all_orders(mask,kernel))
+        dispersed_mask = torch.abs(fwd.fourier.method.disperser.disperse_all_orders(mask,kernel.to('cpu')))
         dispersed_mask[dispersed_mask<0.01] = 0
+        dispersed_mask[dispersed_mask>0] = 1
 
         np.save(anadir+'dispersed_mask.npy',dispersed_mask.numpy())
         dispersed_mask = torch.tensor(dispersed_mask).to(device)
@@ -325,35 +376,42 @@ def normalize(data):
 
 
 
-def interpolate_signal(data, desired_channels, index_axis, interp_type='nearest'):
+def interpolate_signal(data, desired_channels, interp_axis, interp_type='nearest'):
     '''
     simplest possible example.
     desired_channels is desired channels.
-    index_axis is the axis to interpolate on.
+    interp_axis is the axis to interpolate on.
     interp_type is the type of interpolation. Can be 'nearest'(fast) or 'average'(slow)
     '''
 
     desired_bins = np.linspace(750,851,desired_channels)*1e-9
 
-    actual_bins = np.linspace(700,900,data.shape[index_axis]) * 1e-9 #assuming we are from 700 to 900
+    actual_bins = np.linspace(700,900,data.shape[interp_axis]) * 1e-9 #assuming we are from 700 to 900
 
     
     if interp_type == 'nearest':
         idx = np.zeros_like(desired_bins,dtype=int)
         for i in np.arange(len(desired_bins)):
             idx[i] = (np.abs(actual_bins - desired_bins[i])).argmin() #just find the closest one. (can replace with mean or something)
-        newdata = np.take(data,idx,axis=index_axis)
+        newdata = np.take(data,idx,axis=interp_axis)
 
     elif interp_type == 'average':
         newshape = list(data.shape)
-        newshape[index_axis] = desired_channels
+        newshape[interp_axis] = desired_channels
         newdata = np.zeros(newshape)
 
         dlambda = (desired_bins[1] - desired_bins[0])/2
 
         for i in np.arange(desired_channels):
             idx = np.where((actual_bins > desired_bins[i] - dlambda) * (actual_bins<desired_bins[i]+dlambda)) [0]
-            indices = tuple([i if j==index_axis else slice(None) for j in range(len(newshape))])
-            newdata[indices] = np.mean(np.take(data,idx,axis=index_axis),axis=index_axis)
+            indices = tuple([i if j==interp_axis else slice(None) for j in range(len(newshape))])
+            newdata[indices] = np.mean(np.take(data,idx,axis=interp_axis),axis=interp_axis)
 
     return newdata
+
+def load_cube(anadir):
+    signalfft_center = np.load(anadir+'signalfft_padded_center.npy')
+    signalfft_left = np.load(anadir+'signalfft_padded_left.npy')
+    signalfft_right = np.load(anadir+'signalfft_padded_right.npy')
+    undisp_cube = np.concatenate((signalfft_left,signalfft_center,signalfft_right),axis = 1) 
+    return undisp_cube
