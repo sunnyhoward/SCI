@@ -13,7 +13,8 @@ def train(model, optimizer, loss_fn, train_dl, val_dl, epochs=100, device='cuda'
     @TODO: Add the ability to redirect the print statements to the model_results.txt file.
     '''
 
-    model_name = model.name
+    try:  model_name = model.name
+    except: model_name = type(model).__name__
     lr = optimizer.param_groups[0]['lr']
 
     print('train called: model=%s, opt=%s(lr=%f), epochs=%d, device=%s\n' % \
@@ -200,14 +201,14 @@ class FTSDataset(Dataset):
             Returns:
                     (array): undispersed, unintegrated cube
     '''
-    def __init__(self, undispersed_cube, spectra, dir = '20230522_mask_2gratings_data_talbot_0_15000us/', crop=True):
+    def __init__(self, undispersed_cube, spectra, dir, crop=True):
         super(FTSDataset, self).__init__()
 
         self.undispersed_cube = undispersed_cube
         self.spectra = spectra
         self.crop = crop    
         self.set_batch()
-        self.dir = '/project/agdoepp/Experiment/Hyperspectral_Calibration_FTS/'+dir
+        self.dir = '/project/agdoepp/Experiment/Hyperspectral_Calibration_FTS/'+dir + '/'
         self.positions = np.load(self.dir+'/positions.npy')
 
 
@@ -229,58 +230,6 @@ class FTSDataset(Dataset):
         
         return y, x
     
-
-
-
-
-
-
-
-
-class KernelLearnerDataset(Dataset):
-    '''
-    Here we generate data from the real FTS measurements. 
-
-            Parameters:
-                    undispersed_cube (array): This should really be the imaged mask cube
-                    spectra (array): the spectral modulation information from fts
-
-            Returns:
-                    (array): undispersed, unintegrated cube
-    '''
-    def __init__(self, undispersed_cube, spectra, dir = '20230522_mask_2gratings_data_talbot_0_15000us/', crop=True):
-        super(KernelLearnerDataset, self).__init__()
-
-        self.undispersed_cube = undispersed_cube
-        self.spectra = spectra
-        self.crop = crop    
-        self.set_batch()
-        self.dir = '/project/agdoepp/Experiment/Hyperspectral_Calibration_FTS/'+dir
-        self.positions = np.load(self.dir+'/positions.npy')
-
-
-    def set_batch(self,batch=2):
-        self.batch = batch
-        self.data = torch.tile(self.undispersed_cube,(batch,1,1,1))
-
-    def __len__(self):
-        return len(self.spectra[0])
-
-    def __getitem__(self, index):
-
-        x = self.data * self.spectra[:,index].permute(1,0).unsqueeze(-1).unsqueeze(-1)
-        y = torch.stack([torch.from_numpy(np.load(self.dir + 'piezopos_' + str(i) + '.npy').astype(np.float32)/ 4096) for i in self.positions[index]],dim = 0) 
-
-        if self.crop:
-            nx,ny = x.shape[2:]
-            x = x[...,nx//2 - 320 : nx//2+320,ny//2 - 320 : ny//2+320]
-        
-        return x,y
-
-
-
-
-
 
 
 
@@ -307,12 +256,10 @@ class HDF5Dataset(Dataset):
 
 
 
-
-
 ###########################################################################################
 
 
-def create_bs_data(desired_channels, kernel, dir = '20230522_mask_2gratings_data_talbot_0_15000us', interp_type='nearest', crop_cube = False, device='cuda'):
+def create_bs_data(desired_channels, kernel, fts_dir, cube_dir = None, interp_type='average', device='cuda'):
     '''
     This is ugly so put it in a function. 
 
@@ -320,35 +267,45 @@ def create_bs_data(desired_channels, kernel, dir = '20230522_mask_2gratings_data
 
     desired_channels is the number of channels you want to interpolate to.
     kernel is the kernel to disperse with.
-    dir is the directory of the data.
+    fts_dir is the directory of the fts data (with grating)
+    cube_dir is the directory of the undispersed cube (maybe without grating)
     interp_type is the type of interpolation. Can be 'nearest'(fast) or 'average'(slow)
     crop_cube is whether to crop the cube to 640x640 or not (useful when we have a 9 copy fts data.)
     '''
     print('collecting the undispersed cube and spectra.')
 
     ###load the cube###
-    anasubdir = dir.split('data')
+    anasubdir = fts_dir.split('data')
     anasubdir = anasubdir[0] + 'analysis' + anasubdir[1]
 
     anadir = '/project/agdoepp/Experiment/Hyperspectral_Calibration_FTS/'+anasubdir + '/'
-    datadir = '/project/agdoepp/Experiment/Hyperspectral_Calibration_FTS/'+dir + '/'
+    datadir = '/project/agdoepp/Experiment/Hyperspectral_Calibration_FTS/'+fts_dir + '/'
     
+    if cube_dir is None:
+        cube_dir = anadir
+        cube_dir_stat = 'copy'
+    else:
+        cube_dir  = '/project/agdoepp/Experiment/Hyperspectral_Calibration_FTS/'+cube_dir + '/'
+        cube_dir_stat = 'real'
+
     ###load the cube and FTS spectra###
-    undisp_cube = load_cube(anadir)
+    undisp_cube = load_cube(cube_dir)
     spectras = np.load(datadir+'spectra.npy') 
 
     ###interpolate to desired channels###
-    undisp_cube = interpolate_signal(undisp_cube, desired_channels, interp_axis = 2, interp_type=interp_type) #interpolate to 750-850nm
-    spectras = interpolate_signal(spectras, desired_channels, interp_axis = 0, interp_type=interp_type) #interpolate to 750-850nm
+    undisp_cube = downsample_signal(undisp_cube, desired_channels, interp_axis = 2, interp_type=interp_type) #interpolate to 750-850nm
+    spectras = downsample_signal(spectras, desired_channels, initial_range=[345.114169, 1036.5037173765845], interp_axis = 0, interp_type=interp_type) #interpolate to 750-850nm
 
-    if crop_cube:
+    #if cube_dir is copied, then we should just take the central region of it as the true cube (the undispersed)
+    if cube_dir_stat == 'copy':
         zeros = np.zeros_like(undisp_cube)
         sx,sy = undisp_cube.shape[:2]
         zeros[sx//2 - 320 : sx//2+320,sy//2 - 320 : sy//2+320] = undisp_cube[sx//2 - 320 : sx//2+320,sy//2 - 320 : sy//2+320]
         undisp_cube = zeros
 
+
     try:
-        dispersed_mask = torch.tensor(np.load(anadir+'dispersed_mask.npy')).float().to(device) #this needs changing also as I just made it by thresholding data.
+        dispersed_mask = torch.tensor(np.load(cube_dir+'dispersed_mask.npy')).float().to(device) #this needs changing also as I just made it by thresholding data.
     except:
         print('no mask found, creating one.')
         mask = undisp_cube > 0.05 * undisp_cube.max() #this is a hack.
@@ -376,18 +333,23 @@ def normalize(data):
 
 
 
-def interpolate_signal(data, desired_channels, interp_axis, interp_type='nearest'):
+def downsample_signal(data, desired_channels, initial_range = [700,900], desired_range = [750,850], interp_axis = -1, interp_type='nearest'):
     '''
+    TO BE RENAMED to DOWNSAMPLE_SIGNAL
     simplest possible example.
     desired_channels is desired channels.
     interp_axis is the axis to interpolate on.
     interp_type is the type of interpolation. Can be 'nearest'(fast) or 'average'(slow)
     '''
 
-    desired_bins = np.linspace(750,851,desired_channels)*1e-9
+    if interp_axis==-1:
+        interp_axis = len(data.shape)-1
+    
+    actual_bins = np.linspace(initial_range[0],initial_range[1],data.shape[interp_axis]) * 1e-9 
 
-    actual_bins = np.linspace(700,900,data.shape[interp_axis]) * 1e-9 #assuming we are from 700 to 900
+    desired_bins = np.linspace(desired_range[0],desired_range[1],desired_channels)*1e-9
 
+    
     
     if interp_type == 'nearest':
         idx = np.zeros_like(desired_bins,dtype=int)
@@ -415,3 +377,39 @@ def load_cube(anadir):
     signalfft_right = np.load(anadir+'signalfft_padded_right.npy')
     undisp_cube = np.concatenate((signalfft_left,signalfft_center,signalfft_right),axis = 1) 
     return undisp_cube
+
+
+
+def center_cubes(nograting_cube, grating_cube):
+    '''
+    given a cube without grating and one with grating, match the locations of the fundamental.
+    '''
+
+    sx,sy = nograting_cube.shape[2:]
+
+    center_x, center_y = torch.sum(nograting_cube[0],dim=(0,2)).argmax(), torch.sum(nograting_cube[0],dim=(0,1)).argmax()
+
+    rollx = (center_x-sx//2,center_y-sy//2)
+
+    pointspot = sx//2  + rollx[0]   , sy//2+ rollx[1]
+
+    size = 50 //2
+
+
+    nograting_cube_rolled = torch.roll(nograting_cube, shifts=(-rollx[0],-rollx[1]), dims=(2, 3))
+    grating_cube_rolled = torch.roll(grating_cube, shifts=(-rollx[0],-rollx[1]), dims=(2, 3)) # shift them both to the center of nograting_cube
+
+    pointspot = sx//2    , sy//2
+
+
+    grating_maxloc = torch.stack(torch.where(torch.sum(grating_cube_rolled[0,:,pointspot[0]-size:pointspot[0]+size+1,pointspot[1]-size:pointspot[1]+size+1].cpu().detach(),dim=0) == torch.sum(grating_cube_rolled[0,:,pointspot[0]-size:pointspot[0]+size+1,pointspot[1]-size:pointspot[1]+size+1].cpu().detach(),dim=0).max()))
+    nograting_maxloc = torch.stack(torch.where(torch.sum(nograting_cube_rolled[0,:,pointspot[0]-size:pointspot[0]+size+1,pointspot[1]-size:pointspot[1]+size+1].cpu().detach(),dim=0) == torch.sum(nograting_cube_rolled[0,:,pointspot[0]-size:pointspot[0]+size+1,pointspot[1]-size:pointspot[1]+size+1].cpu().detach(),dim=0).max()))
+
+    delta_pos = nograting_maxloc -  grating_maxloc  
+
+    grating_cube_rolled = torch.roll(grating_cube_rolled, shifts=(delta_pos[0].numpy()[0],delta_pos[1].numpy()[0]), dims=(2, 3)) # shift the grating cube to the difference
+
+    grating_cube = grating_cube_rolled
+    nograting_cube = nograting_cube_rolled
+
+    return nograting_cube, grating_cube

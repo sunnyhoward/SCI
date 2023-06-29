@@ -1,57 +1,39 @@
 import numpy as np
 import torch
+import os, sys
+main_dir = os.path.dirname(os.path.abspath(''))
+sys.path.insert(0, main_dir)
+from models.helper import downsample_signal
+from scipy.interpolate import interp1d
+import torch.nn as nn
 
 
 
-def create_fourier_kernel():
+def create_fourier_kernel(desired_channels=21):
 
     path_share = '/project/agdoepp/Experiment/Hyperspectral_Calibration_FTS/'
 
-    gratings_intensity_modulations = np.load(path_share+'gratings_intensity_modulations.npy')
-    frames = np.load(path_share+'gratings_location_names.npy')
-    wavelengths = np.load(path_share+'gratings_wavelengths.npy')
+    gratings_intensity_modulations = np.load(path_share+'gratings_intensity_modulations_nm_resolution.npy')
+    wavelengths = np.load(path_share+'gratings_wavelengths_nm_resolution.npy') #between 700 and 900 nm
 
-
-    # #horizontal dispersion in pixel per nm
-    # shift_vertical_per_nm = 1.176
-    # #horizontal dispersion in pixel at 800 nm
-    # shift_vertical_800 = 929.6
-    # #vertical dispersion in pixel per nm
-    # shift_horizontal_per_nm = 0.865
-    # #vertical dispersion in pixel at 800 nm
-    # shift_horizontal_800 = 683.5
-
-
-    # #minor horizontal dispersion in pixel per nm
-    # shift_vertical_per_nm_minor = 0.009725072789688607
-    # #minor vertical dispersion in pixel per nm
-    # shift_horizontal_per_nm_minor = 0.00694456115609506
-
-    # #minor horizontal dispersion in pixel at 800 nm
-    # shift_vertical_800_minor = 10.213262024505468 + 2
-    # #minor vertical dispersion in pixel at 800 nm
-    # shift_horizontal_800_minor = -5.687984251728911
-
-    #horizontal dispersion in pixel per nm
-    shift_vertical_per_nm = 1.178928619271314
-    #horizontal dispersion in pixel at 800 nm
-    shift_vertical_800 = 929.8900351442538
-    #vertical dispersion in pixel per nm
-    shift_horizontal_per_nm = 0.8660647241600007
+    #    #vertical dispersion in pixel per nm
+    shift_vertical_per_nm =  1.1324938301431489
     #vertical dispersion in pixel at 800 nm
-    shift_horizontal_800 = 683.5719160857097
+    shift_vertical_800 = 929.1633879050196
+    #horizontal dispersion in pixel per nm
+    shift_horizontal_per_nm = 0.8429029601380736
+    #horizontal dispersion in pixel at 800 nm
+    shift_horizontal_800 = 683.6675760385812
 
 
-    #minor horizontal dispersion in pixel per nm
-    shift_vertical_per_nm_minor = 0.01128525750120758
     #minor vertical dispersion in pixel per nm
-    shift_horizontal_per_nm_minor = 0.003468350809689265
-
-    #minor horizontal dispersion in pixel at 800 nm
-    shift_vertical_800_minor = 10.12119473261356
+    shift_vertical_per_nm_minor = 0.041534067912511255
+    #minor horizontal dispersion in pixel per nm
+    shift_horizontal_per_nm_minor = 0.0005687614938061433
     #minor vertical dispersion in pixel at 800 nm
-    shift_horizontal_800_minor = 2.586064353733273
-
+    shift_vertical_800_minor =  11.33549523982135
+    #minor horizontal dispersion in pixel at 800 nm
+    shift_horizontal_800_minor = 1.9162529524255756
 
 
 
@@ -74,6 +56,7 @@ def create_fourier_kernel():
     center_x = size_x//2
     center_y = size_y//2
     ninecopyconvolution = torch.zeros([size_x, size_y, len(wavelengths)])#.to(device)
+
     for i in np.arange(len(wavelengths)):
         additional_shift_vertical = (wavelengths[i] - 800) * shift_vertical_per_nm
         additional_shift_horizontal = (wavelengths[i] - 800) * shift_horizontal_per_nm
@@ -91,14 +74,6 @@ def create_fourier_kernel():
         ninecopyconvolution[center_x - int(np.floor(shift_instance_x)), center_y + int(np.ceil(shift_instance_y_minor)), i] += (1-(shift_instance_x%1)) * (shift_instance_y_minor%1) * intensity_polgrat_bottom[i]
         ninecopyconvolution[center_x - int(np.ceil(shift_instance_x)), center_y + int(np.ceil(shift_instance_y_minor)), i] += (shift_instance_x%1) * (shift_instance_y_minor%1) * intensity_polgrat_bottom[i]
 
-        # print(wavelengths[i])
-        
-        # print(shift_instance_y)
-        # print(center_x - int(np.floor(shift_instance_x)))
-        # print((1-(shift_instance_x%1)) * intensity_polgrat_bottom[i])
-        # print(center_x - int(np.ceil(shift_instance_x)))
-        # print((shift_instance_x%1) * intensity_polgrat_bottom[i])
-        # print('---')
 
         ninecopyconvolution[center_x + int(np.floor(shift_instance_x)), center_y - int(np.floor(shift_instance_y_minor)), i] += (1-(shift_instance_x%1)) * (1-(shift_instance_y_minor%1)) * intensity_polgrat_top[i]
         ninecopyconvolution[center_x + int(np.ceil(shift_instance_x)), center_y - int(np.floor(shift_instance_y_minor)), i] += (shift_instance_x%1) * (1-(shift_instance_y_minor%1)) * intensity_polgrat_top[i]
@@ -135,8 +110,9 @@ def create_fourier_kernel():
         ninecopyconvolution[center_x + int(np.floor(shift_instance_x-shift_instance_x_minor)), center_y + int(np.ceil(shift_instance_y-shift_instance_y_minor)), i] += (1-((shift_instance_x-shift_instance_x_minor)%1)) * ((shift_instance_y-shift_instance_y_minor)%1) * intensity_top_right[i]
         ninecopyconvolution[center_x + int(np.ceil(shift_instance_x-shift_instance_x_minor)), center_y + int(np.ceil(shift_instance_y-shift_instance_y_minor)), i] += ((shift_instance_x-shift_instance_x_minor)%1) * ((shift_instance_y-shift_instance_y_minor)%1) * intensity_top_right[i]
 
-        
-    ninecopyconvolution = torch.fft.fftshift(ninecopyconvolution,dim=(0,1))
+
+    ninecopyconvolution = torch.tensor(downsample_signal(ninecopyconvolution.numpy(), desired_channels=desired_channels, initial_range=[700,900], desired_range=[750,850], interp_axis=-1, interp_type='average')).float()
+
 
     ninecopyconvolution = ninecopyconvolution / torch.sum(ninecopyconvolution,dim=(0,1))
-    return ninecopyconvolution
+    return ninecopyconvolution.unsqueeze(0).permute(0,3,1,2)

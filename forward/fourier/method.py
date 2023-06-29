@@ -50,8 +50,13 @@ def calc_psiT_g(psi, g, shift_info,  wiener=True, lamb=0.1, normalize=False): #@
 
 
 class disperser:
+    
     @staticmethod
     def disperse_all_orders(cube, kernel, pad=False): # @TODO Why does padding break?
+
+        # the kernel comes in its real space form.
+        kernel = torch.fft.fftshift(kernel,dim=(2,3)) #dont get why this is neccessary really
+
         nx,ny = cube.shape[2:]
         if pad:
             pad_x = int(np.ceil(nx/2))
@@ -71,6 +76,9 @@ class disperser:
 
     @staticmethod
     def undisperse_all_orders(cube, kernel, wiener = False, pad=False, **kwargs): # @TODO Why does padding break? 
+
+        kernel = torch.fft.fftshift(kernel,dim=(2,3)) #dont get why this is neccessary really
+
         nx,ny = cube.shape[2:]
         if pad:
             pad_x = int(np.ceil(nx/2))

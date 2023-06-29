@@ -16,37 +16,20 @@ def clear_gpu():
     gc.collect()
     torch.cuda.empty_cache()
 
-#os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-#os.environ["CUDA_VISIBLE_DEVICES"] = "2"
-
-if torch.cuda.is_available():
-    print(torch.cuda.device_count(), "GPU(s) available:")
-    for i in range(torch.cuda.device_count()):
-        print(torch.cuda.get_device_name(i))
-else:
-    print("No GPUs available.")
-
-gpuno = 4
+gpuno = 3
 device = f'cuda:{gpuno}'
 
+kernel = torch.load('kernel.pt',map_location=device)
 
-undisp_cube, mask, spectras = hlp.create_bs_data(desired_channels=21, dir = '20230522_mask_2gratings_data_talbot_0_15000us',interp_type='average',device=device) #here we'll work with synthetic data. 
-blamask = torch.zeros_like(undisp_cube)
-sx,sy = undisp_cube.shape[2:]
+fts_dir = '20230628_2gratings_data_1500us_talbot_0'
 
-blamask[...,sx//2-320:sx//2+320,sy//2-320:sy//2+320] = 1
-undisp_cube = undisp_cube * blamask
+undisp_cube, mask, spectras = hlp.create_bs_data(desired_channels=21,kernel=kernel, fts_dir = fts_dir, cube_dir ='20230628_analysis_300us_talbot_0',  interp_type='average',device=device) #here we'll work with synthetic data. 
 
-del blamask
-print(undisp_cube.shape, mask.shape, spectras.shape)
-
-batch_size = 1
+batch_size = 2
+exist = False
 # torch.cuda.empty_cache()
 
-
-kernel = create_fourier_kernel().unsqueeze(0).permute(0,3,1,2).to(device)
-
-dataset = hlp.FTSDataset(undispersed_cube=undisp_cube, spectra = spectras)
+dataset = hlp.FTSDataset(undispersed_cube=undisp_cube,dir=fts_dir, spectra = spectras) #chose the dir here idiot
 
 allindexes = np.arange(len(dataset))
 np.random.shuffle(allindexes)
@@ -57,12 +40,17 @@ v_indexes = allindexes[int(0.8*len(allindexes)):]
 tr_loader = hlp.CustomDataLoader(dataset, tr_indexes, batch_size=batch_size, shuffle=True)
 v_loader = hlp.CustomDataLoader(dataset, v_indexes, batch_size=batch_size, shuffle=True)
 
-model = fourier_denoiser(mask=mask,kernel=kernel,CoordGate=False).to(device)
+model = FourierDenoiser(mask=mask,kernel=kernel,CoordGate=False,name='FTS_unet').to(device)
 #model = DataParallel(model,device_ids=[1,2,3]).to(0)
 
+if exist:
+    model.load_state_dict(torch.load('FTS_unet')); #trained on all data.
+    lr = 5e-5
+else:
+    lr = 5e-4
+    
+epochs = 50
 
-lr = 5e-4
-epochs = 30
 
 
 optimizer = torch.optim.Adam(model.parameters(), lr=lr)
@@ -73,4 +61,6 @@ history = hlp.train(model, optimizer, loss, tr_loader, v_loader, epochs=epochs, 
 with torch.cuda.device(device):
     torch.cuda.empty_cache()
 
-torch.save(model.state_dict(), 'unet_fts')
+
+
+torch.save(model.state_dict(), model.name)

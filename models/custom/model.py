@@ -11,7 +11,7 @@ from models.custom.modules import *
 
 class FourierDenoiser(nn.Module):
     """
-    In this model we pass the measurement (9 copies) through a simple cnn, then we do the fourier deconvolution, before cropping and putting the output through a denoising UNet (w/ CoordGate).
+    In this model we do fourier deconvolution on measurement (9 copies), before cropping and putting the output through a denoising UNet (w/ CoordGate). Optionally we can also have the kernel be trainable.
     Input: mask - the predispersed mask-cube (bs,nc,nx,ny)
     """
 
@@ -21,14 +21,10 @@ class FourierDenoiser(nn.Module):
         self.trainable_kernel = trainable_kernel
         self.kernel = kernel
 
+
         if trainable_kernel:
             
-            locations = findclusters(kernel,padding=4) #searches for places where the kernel is not zero and creates a mask
-
-            self.locations = locations
-
-
-            self.variable_kernel = nn.Parameter(kernel[0,locations], requires_grad=True)
+            self.kernel_learner = KernelLearner(self.kernel,  name='kernel_learner')
 
         
         self.relu = nn.ReLU()
@@ -53,10 +49,6 @@ class FourierDenoiser(nn.Module):
         Input: the measurement - (batch_size, nx, ny)
         '''
 
-        #first id like to add some convolution to the original measurement (and to the kernel).
-
-        # x = self.initial_conv(x.unsqueeze(1))[:,0]
-
         x = self.data_term(x)   
         x = self.crop(x)
         x = self.unet(x)
@@ -65,20 +57,11 @@ class FourierDenoiser(nn.Module):
 
 
     def data_term(self,x):
-        kernel = self.fill_kernel()#self.relu(self.fill_kernel())
+        kernel = self.kernel_learner.fill_kernel() if self.trainable_kernel else self.kernel
         self.shift_info = {'kernel':kernel}
         x = calc_psiT_g(self.mask, x, self.shift_info, lamb=self.relu(self.wiener_noise)) #(bs,nc,nx,ny)
         return x
     
-
-    def fill_kernel(self):
-        if self.trainable_kernel:
-            kernel = torch.zeros_like(self.kernel)
-            kernel[0,self.locations] = self.relu(self.variable_kernel)
-        else:
-            kernel = self.kernel
-        return kernel
-
 
     def crop(self,x):
         nx,ny = x.shape[2:]
@@ -88,6 +71,9 @@ class FourierDenoiser(nn.Module):
     
 
 class CG_UNet(nn.Module):
+    '''
+    UNet with CoordGate
+    '''
     def __init__(self, n_channels, n_classes, n_levels, bilinear=False, BN=False, init_size = [640,640],device='cuda'):
         super(CG_UNet, self).__init__()
         self.n_channels = n_channels
@@ -129,8 +115,6 @@ class CG_UNet(nn.Module):
         self.outc = (OutConv(clist[0], n_classes))
 
 
-
-
     def forward(self, x):
         
         x = self.inc(x)
@@ -154,11 +138,11 @@ class CG_UNet(nn.Module):
 
 class KernelLearner(nn.Module):
     """
-    In this model we pass the measurement (9 copies) through a simple cnn, then we do the fourier deconvolution, before cropping and putting the output through a denoising UNet (w/ CoordGate).
-    Input: mask - the predispersed mask-cube (bs,nc,nx,ny)
+    Here we make the kernel trainable. We do this by finding where the original kernel is non-zero, and then making all elements around the padding as trainable. 
+    The forward call simply simulates the forward measurement.
     """
 
-    def __init__(self, kernel, padding =4, name=None):
+    def __init__(self, kernel , padding = 4, name=None):
         super().__init__()
 
         self.kernel = kernel
@@ -166,13 +150,12 @@ class KernelLearner(nn.Module):
             
         locations = findclusters(kernel,padding) #searches for places where the kernel is not zero and creates a mask
 
-        self.locations = locations
+        self.locations = nn.Parameter(locations,requires_grad=False)
 
 
-        # self.variable_kernel = nn.Parameter(kernel[0,locations], requires_grad=True)
-        self.variable_kernel = nn.Parameter(torch.rand(kernel[0,locations].shape), requires_grad=True)
+        self.variable_kernel = nn.Parameter(kernel[0,locations], requires_grad=True)
 
-        self.relu = nn.ReLU()
+        self.relu = nn.ReLU()  #nn.LeakyReLU()
         
 
         self.name = 'KernelLearner' if name is None else name
@@ -186,7 +169,8 @@ class KernelLearner(nn.Module):
         #first id like to add some convolution to the original measurement (and to the kernel).
 
         kernel = self.fill_kernel()
-        x = calc_psi_z(torch.ones_like(x), x, {'kernel':kernel}) #perform measurement
+
+        x = disperser.disperse_all_orders(x,kernel) #perform measurement
 
         return x
 
@@ -198,3 +182,55 @@ class KernelLearner(nn.Module):
 
         return kernel
 
+
+
+class AffineTransformModel(nn.Module):
+    '''
+    A model that can apply seperate rotations and translations in certain regions. 
+    '''
+    def __init__(self, region, rot=20., transX=0., transY=0.):
+        super().__init__()
+
+        no_regions = len(region)
+
+        self.rot_list = nn.Parameter(torch.deg2rad(torch.tensor([rot] * no_regions)))
+        self.transX_list = nn.Parameter(torch.tensor([transX] * no_regions))
+        self.transY_list = nn.Parameter(torch.tensor([transY] * no_regions))
+
+        self.pos = region
+
+        self.theta = nn.Parameter(torch.zeros(no_regions, 1, 2, 3), requires_grad = False)#.to(device)
+
+        self.no_regions = no_regions
+
+        self.grating_spectrum = nn.Parameter(torch.ones(no_regions, 21), requires_grad = True)
+
+
+    def forward(self, x):
+        transformed_x = x.clone()
+
+        theta = self.fill_theta()
+
+        for i in range(self.no_regions):
+           
+            grid = F.affine_grid(theta[i], x[:,:,self.pos[i,0,0]:self.pos[i,0,1],self.pos[i,1,0]:self.pos[i,1,1]].size(), align_corners=False)
+            transformed_x[:,:,self.pos[i,0,0]:self.pos[i,0,1],self.pos[i,1,0]:self.pos[i,1,1]] = F.grid_sample(x[:,:,self.pos[i,0,0]:self.pos[i,0,1],self.pos[i,1,0]:self.pos[i,1,1]], grid, align_corners=False) * self.grating_spectrum[i].unsqueeze(0).unsqueeze(-1).unsqueeze(-1)
+
+        return transformed_x
+    
+
+    def fill_theta(self):
+        theta = torch.zeros_like(self.theta)
+
+        for i in range(self.no_regions):
+            rot_i = torch.cos(self.rot_list[i])  # Access the rotation parameter directly
+            sin_i = torch.sin(self.rot_list[i])
+
+            theta[i,:,0,0] = rot_i
+            theta[i,:,0,1] = -sin_i
+            theta[i,:,1,0] = sin_i
+            theta[i,:,1,1] = rot_i
+            theta[i,:,0,2] = self.transY_list[i]
+            theta[i,:,1,2] = self.transX_list[i]
+
+        return theta
