@@ -19,37 +19,42 @@ def clear_gpu():
 gpuno = 3
 device = f'cuda:{gpuno}'
 
-kernel = torch.load('kernel.pt',map_location=device)
+kernel = torch.load('kernel.pt',map_location=device).requires_grad_(False)
 
-fts_dir = '20230628_2gratings_data_1500us_talbot_0'
+fts_dir = '20230628_2gratings_mask_data_10000us_talbot_0'
 
-undisp_cube, mask, spectras = hlp.create_bs_data(desired_channels=21,kernel=kernel, fts_dir = fts_dir, cube_dir ='20230628_analysis_300us_talbot_0',  interp_type='average',device=device) #here we'll work with synthetic data. 
+undisp_cube, mask, spectras = hlp.create_bs_data(desired_channels=21,kernel=kernel, fts_dir = fts_dir, cube_dir ='20230629_mask_analysis_800us_talbot_0',  interp_type='average',device=device) #here we'll work with synthetic data. 
 
-batch_size = 2
-exist = False
+batch_size = 4
+exist = True
 # torch.cuda.empty_cache()
 
-dataset = hlp.FTSDataset(undispersed_cube=undisp_cube,dir=fts_dir, spectra = spectras) #chose the dir here idiot
+dataset = hlp.FTSDataset(undispersed_cube=undisp_cube,dir=fts_dir, spectra = spectras,random_shifts=True) #chose the dir here idiot
 
-allindexes = np.arange(len(dataset))
-np.random.shuffle(allindexes)
-tr_indexes = allindexes[:int(0.8*len(allindexes))]
-v_indexes = allindexes[int(0.8*len(allindexes)):] 
+
+allindexes = np.arange(1200,2000); np.random.shuffle(allindexes)  #to avoid high modulation ############SUNNY WATCH OUT IF YOU CHANGE FTS_DIR
+# allindexes = np.arange(len(dataset));  np.random.shuffle(allindexes)
+
+tr_split = int((0.8*len(allindexes)) // batch_size * batch_size)
+v_split = -int((0.2*len(allindexes)) // batch_size * batch_size)
+
+tr_indexes = allindexes[:tr_split]
+v_indexes = allindexes[v_split:] 
 
 # Create a data loader for batch processing
 tr_loader = hlp.CustomDataLoader(dataset, tr_indexes, batch_size=batch_size, shuffle=True)
 v_loader = hlp.CustomDataLoader(dataset, v_indexes, batch_size=batch_size, shuffle=True)
 
-model = FourierDenoiser(mask=mask,kernel=kernel,CoordGate=False,name='FTS_unet').to(device)
+model = FourierDenoiser(mask=mask,kernel=kernel,CoordGate=False,name='FTS_unet_rand_shifts').to(device)
 #model = DataParallel(model,device_ids=[1,2,3]).to(0)
 
 if exist:
-    model.load_state_dict(torch.load('FTS_unet')); #trained on all data.
-    lr = 5e-5
+    model.load_state_dict(torch.load('FTS_unet_rand_shifts')); #trained on all data.
+    lr = 5e-4
 else:
     lr = 5e-4
     
-epochs = 50
+epochs = 100
 
 
 

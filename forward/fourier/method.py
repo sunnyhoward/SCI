@@ -52,39 +52,56 @@ def calc_psiT_g(psi, g, shift_info,  wiener=True, lamb=0.1, normalize=False): #@
 class disperser:
     
     @staticmethod
-    def disperse_all_orders(cube, kernel, pad=False): # @TODO Why does padding break?
+    def disperse_all_orders(cube, kernel, pad=True, real_part=True): 
+        wl = cube.shape[1]
+        return torch.concat([disperser._disperse_all_orders(cube[:,c:c+1],kernel[:,c:c+1], pad, real_part) for c in range(wl)],axis=1) #to avoid making big tensors for memory problems
 
-        # the kernel comes in its real space form.
-        kernel = torch.fft.fftshift(kernel,dim=(2,3)) #dont get why this is neccessary really
-
+    @staticmethod
+    def _disperse_all_orders(cube, kernel, pad=True,real_part=True):
         nx,ny = cube.shape[2:]
         if pad:
             pad_x = int(np.ceil(nx/2))
             pad_y = int(np.ceil(ny/2))
+
             cube = torch.nn.functional.pad(cube,(pad_y,pad_y,pad_x,pad_x))
             kernel = torch.nn.functional.pad(kernel,(pad_y,pad_y,pad_x,pad_x))
+
+        # the kernel comes in its real space form.
+        kernel = torch.fft.fftshift(kernel,dim=(2,3)) #dont get why this is neccessary really
+
 
         f_cube = torch.fft.fft2(cube)
         f_kernel = torch.fft.fft2(kernel)
         f_cube_disp = f_cube * f_kernel
-        cube_disp = torch.real(torch.fft.ifft2(f_cube_disp)) #or abs?
+        cube_disp = torch.fft.ifft2(f_cube_disp) #or abs?
+
+        if real_part:
+            cube_disp = torch.real(cube_disp)
 
         if pad:
             cube_disp = cube_disp[:,:,pad_x:-pad_x,pad_y:-pad_y]
         return cube_disp
     
 
+
+
     @staticmethod
-    def undisperse_all_orders(cube, kernel, wiener = False, pad=False, **kwargs): # @TODO Why does padding break? 
+    def undisperse_all_orders(cube, kernel, wiener = False, pad=True, real_part = True,  **kwargs):
+        wl = cube.shape[1]
+        return torch.concat([disperser._undisperse_all_orders(cube[:,c:c+1],kernel[:,c:c+1], wiener, pad, real_part, **kwargs) for c in range(wl)],axis=1)
 
-        kernel = torch.fft.fftshift(kernel,dim=(2,3)) #dont get why this is neccessary really
-
+    @staticmethod
+    def _undisperse_all_orders(cube, kernel, wiener = False, pad=True, real_part = True,  **kwargs):
+        
         nx,ny = cube.shape[2:]
         if pad:
             pad_x = int(np.ceil(nx/2))
             pad_y = int(np.ceil(ny/2))
+
             cube = torch.nn.functional.pad(cube,(pad_y,pad_y,pad_x,pad_x))
             kernel = torch.nn.functional.pad(kernel,(pad_y,pad_y,pad_x,pad_x))
+
+        kernel = torch.fft.fftshift(kernel,dim=(2,3)) #dont get why this is neccessary really
 
         f_cube = torch.fft.fft2(cube)
         f_kernel = torch.fft.fft2(kernel)
@@ -95,8 +112,10 @@ class disperser:
         else:
             f_cube_undisp = f_cube / f_kernel
 
-        cube_undisp=torch.real((torch.fft.ifft2(f_cube_undisp))) #or abs
+        cube_undisp=(torch.fft.ifft2(f_cube_undisp)) #or abs
 
+        if real_part:
+            cube_undisp = torch.real(cube_undisp)
 
         if pad:
             cube_undisp = cube_undisp[:,:,pad_x:-pad_x,pad_y:-pad_y]

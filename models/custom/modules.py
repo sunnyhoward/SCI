@@ -2,6 +2,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
+import cv2
+
 
 class CoordGate(nn.Module):
     def __init__(self, encoding_layers, enc_channels, out_channels, size:list=[256,256],device='cuda'):
@@ -39,7 +41,7 @@ class CoordGate(nn.Module):
 
 
 
-def findclusters(kernel, padding = 4, threshold=0, type = 'nearest_neighbour', verbose = False):
+def findclusters(kernel, padding = 4, threshold=0, type = 'nearest_neighbour', cluster_points=9, verbose = False):
     '''
     This function identifies the regions of the kernel.
 
@@ -117,7 +119,7 @@ def findclusters(kernel, padding = 4, threshold=0, type = 'nearest_neighbour', v
             n += 1
             # print(n)
 
-    
+        clusters = clusters[:cluster_points]
 
         return clusters
 
@@ -169,33 +171,51 @@ class CenterOfMassLoss(nn.Module):
     '''
     A model that tries to match the center of mass of the predicted and target tensors in certain regions.
     '''
-    def __init__(self, region, intensity_factor=3):
+    def __init__(self, region, intensity_factor=3, funda_weight = 5, channels=31):
         super(CenterOfMassLoss, self).__init__()
         self.region = region
         self.intensity_factor = intensity_factor
+        self.funda_weight = funda_weight
+        self.channels = channels
+        self.fundamental_index = int(((region[:,0,0]< 1100) & (region[:,0,1] > 1100) & (region[:,1,0] < 1100) & (region[:,1,1] > 1100)).to(torch.float32).argmax())
 
     def forward(self, predicted, target):
 
         total_loss = 0
 
-        for i in range(8): 
-            for l in range(21):
+        mean_target = torch.mean(target)
+
+        for i in range(len(self.region)): 
+            for l in range(self.channels):
+
+                
+
                 # Calculate the center of mass for the predicted and target tensors
-                pred_center = self.calculate_center_of_mass(predicted[:,l], region = self.region[i])
-                target_center = self.calculate_center_of_mass(target[:,l], region = self.region[i])
+                pred_center = self.calculate_center_of_mass(predicted[:,l], region = self.region[i], intensity_factor=self.intensity_factor)
+                target_center = self.calculate_center_of_mass(target[:,l], region = self.region[i], intensity_factor=self.intensity_factor)
+
+                
+                b1,b2 = self.region[i,0]
+                b3,b4 = self.region[i,1]
+
+                weighting = torch.mean(target[:,l,b1:b2,b3:b4]) / mean_target  # weight loss by signal.
+
 
                 # Calculate the loss as the Euclidean distance between the centers of mass
-                total_loss  += torch.norm(pred_center - target_center, p=2) / 21
+                term =  torch.norm(pred_center - target_center, p=2)  * weighting
 
-        return total_loss
+                if i == self.fundamental_index:
+                    term = term * self.funda_weight
+                
+                total_loss  += term
 
+        return total_loss / (self.channels * len(self.region))
 
-    def calculate_center_of_mass(self, tensor, region):
-
-        factor = self.intensity_factor
+    @staticmethod
+    def calculate_center_of_mass(tensor, region, intensity_factor=1):
 
         # Calculate the center of mass within the specified region of the tensor
-        region_tensor = tensor[:,  region[0,0]:region[0,1], region[1,0]:region[1,1]] ** factor
+        region_tensor = tensor[:,  region[0,0]:region[0,1], region[1,0]:region[1,1]] ** intensity_factor #to highlight high intensity bits,
 
         sum_tensor_x = torch.sum(region_tensor, dim=(2))
         sum_tensor_y = torch.sum(region_tensor, dim=(1))
@@ -206,6 +226,9 @@ class CenterOfMassLoss(nn.Module):
         center_x = torch.sum(indices_x.unsqueeze(0) * sum_tensor_x, dim=1) / torch.sum(sum_tensor_x,dim=1)
         center_y = torch.sum(indices_y.unsqueeze(0) * sum_tensor_y, dim=1) / torch.sum(sum_tensor_y,dim=1)
 
+        center_x[torch.isnan(center_x)] = 0
+        center_y[torch.isnan(center_y)] = 0
+
 
 
         center_of_mass = torch.stack((center_x, center_y), dim=1)
@@ -215,3 +238,94 @@ class CenterOfMassLoss(nn.Module):
 
 
 
+
+def find_angle(image):
+    '''
+    given an image that contains a line, find the angle of the line w.r.t horizontal
+    '''
+    
+    image[image<0.05*image.max()] = 0 #threshold
+    image[image>0] = 1 #threshold
+
+    contours,hier = cv2.findContours(np.uint8(image.numpy()),cv2.RETR_LIST,cv2.CHAIN_APPROX_SIMPLE)
+    element = np.argmax([len(contours[i]) for i in range(len(contours))])
+    vx,vy,x,y = cv2.fitLine(contours[element], cv2.DIST_L2, 0, 0.01, 0.01)
+    angle  = np.arctan(vy,vx)
+
+    return torch.tensor(angle)
+
+
+
+
+
+
+
+
+
+########################################################################
+
+# def get_line_coords(image, threshold=0.01, output = 'coords'):
+
+#     image = image.clone()
+    
+#     image[image<threshold*image.max()] = 0 #threshold
+
+#     image = medial_axis(image.numpy()).astype(np.uint8)
+
+#     if output == 'image':   return image
+
+#     line= np.stack(np.where(image==1)).swapaxes(0,1)[:,np.newaxis]
+
+
+#     vx,vy,x,y = cv2.fitLine(line, cv2.DIST_L2, 0, 0.1, 0.1)
+#     center = np.array([x,y])
+#     angle  = np.arctan2(vy,vx)
+
+
+#     up_boundx, lo_boundx = np.max(line[:,0,0]),  np.min(line[:,0,0])
+    
+
+#     line_length = np.min((up_boundx - x, x - lo_boundx))
+
+#     point1 = center + np.array([vx,vy]) * line_length
+#     point2 = center - np.array([vx,vy]) * line_length
+
+#     if output == 'coords':    return angle, np.array((point1, center, point2))
+
+
+# def get_transform_matrix(pred, true, threshold= 0.01, verbose=False):
+    
+#     coords_pred = get_line_coords(pred, threshold)[1][...,0]
+#     coords_true = get_line_coords(true, threshold)[1][...,0]
+
+#     if verbose:
+#         print('prediction_coords: '+str(coords_pred))
+#         print('true_coords'+str(coords_true))
+
+#     warp_mat = cv2.getAffineTransform(coords_pred, coords_true)
+#     return torch.tensor(warp_mat)
+
+
+
+
+# def approximate_matrices(pred_cube, true_cube, pos):
+    
+#     nc = pred_cube.shape[1]
+
+#     pred_points = np.zeros((len(pos),3,2), dtype = np.float32)
+#     true_points = np.zeros((len(pos),3,2), dtype = np.float32)
+
+#     wls = np.linspace(0,nc,5, dtype=int)[1:-1]
+#     for n,i in enumerate(wls):
+#         for j in range(len(pos)):
+
+#             pred_points[j,n] = CenterOfMassLoss.calculate_center_of_mass(pred_cube[:,i], region = pos[j], intensity_factor=3).cpu()
+#             true_points[j,n] = CenterOfMassLoss.calculate_center_of_mass(true_cube[:,i], region = pos[j], intensity_factor=3).cpu()
+
+#     supertheta = np.zeros((len(pos),2,3), dtype = np.float32)
+
+#     for i in range(len(pos)):
+#         supertheta[i] = cv2.getAffineTransform(pred_points[i],true_points[i])
+
+#     return supertheta
+    

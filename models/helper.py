@@ -4,6 +4,12 @@ import h5py
 import forward as fwd
 import time
 import numpy as np
+from skimage.transform import rotate
+import os, sys
+main_dir = os.path.dirname(os.path.dirname(os.path.abspath('')))
+sys.path.insert(0, main_dir)
+from models.custom.modules import CenterOfMassLoss
+import scipy
 
 
 def train(model, optimizer, loss_fn, train_dl, val_dl, epochs=100, device='cuda'):
@@ -136,14 +142,15 @@ class SyntheticDataset(Dataset):
             Returns:
                     (array): undispersed, unintegrated cube
     '''
-    def __init__(self, undispersed_cube, shift_info, spectra, method='fourier', crop=True):
+    def __init__(self, undispersed_cube, shift_info, spectra, crop=False, random_shifts=False):
         super(SyntheticDataset, self).__init__()
 
         self.undispersed_cube = undispersed_cube
         self.shift_info = shift_info
         self.spectra = spectra
         self.crop = crop    
-        self.sensing_function = fwd.fourier.method.calc_psi_z if method == 'fourier' else fwd.rolling.method.calc_psi_z
+        self.sensing_function = fwd.fourier.method.calc_psi_z 
+        self.random_shifts = random_shifts
         self.set_batch()
 
 
@@ -158,11 +165,33 @@ class SyntheticDataset(Dataset):
 
         x = self.spatiotemporal_mult(self.data, index) #apply a modulation to the cube
 
+        if self.random_shifts:
+
+            roll_i, roll_j = np.random.rand() * 3 - 1.5, np.random.rand() * 3 - 1.5
+
+            x_upup = torch.roll(x, shifts=(int(np.ceil(roll_i)),int(np.ceil(roll_j))), dims=(2, 3))
+            x_downdown = torch.roll(x, shifts=(int(np.floor(roll_i)),int(np.floor(roll_j))), dims=(2, 3))
+            x_updown = torch.roll(x, shifts=(int(np.ceil(roll_i)),int(np.floor(roll_j))), dims=(2, 3))
+            x_downup = torch.roll(x, shifts=(int(np.floor(roll_i)),int(np.ceil(roll_j))), dims=(2, 3))
+
+            x = x_upup * (roll_i - np.floor(roll_i)) * (roll_j - np.floor(roll_j)) + x_downdown * (np.ceil(roll_i) - roll_i) * (np.ceil(roll_j) - roll_j) + x_updown * (np.ceil(roll_i) - roll_i) * (roll_j - np.floor(roll_j)) + x_downup * (roll_i - np.floor(roll_i)) * (np.ceil(roll_j) - roll_j)
+
+
         y = self.sensing_function(torch.ones_like(x),x,shift_info=self.shift_info) #measure it
+
+        # y += torch.randn_like(y) * y.max() * 0.00001 #add noise
+
+        # y[y<0] = 0 #remove negative values
+
+
+
         
-        if self.crop:
+        if self.crop != False:
             nx,ny = x.shape[2:]
-            x = x[...,nx//2 - 320 : nx//2+320,ny//2 - 320 : ny//2+320]
+            cropx = self.crop[0] // 2
+            cropy = self.crop[1] // 2
+
+            x = x[...,nx//2 - cropx : nx//2+cropx,ny//2 - cropy : ny//2+cropy]
         
         return y, x
     
@@ -201,15 +230,20 @@ class FTSDataset(Dataset):
             Returns:
                     (array): undispersed, unintegrated cube
     '''
-    def __init__(self, undispersed_cube, spectra, dir, crop=True):
+    def __init__(self, undispersed_cube, spectra, dir, crop=False,random_shifts=False,angle=0):
         super(FTSDataset, self).__init__()
 
         self.undispersed_cube = undispersed_cube
         self.spectra = spectra
-        self.crop = crop    
+        self.crop = crop
+        self.random_shifts = random_shifts
         self.set_batch()
         self.dir = '/project/agdoepp/Experiment/Hyperspectral_Calibration_FTS/'+dir + '/'
         self.positions = np.load(self.dir+'/positions.npy')
+        self.angle = angle
+        
+        try: self.integration_time =   int(dir.split('0us')[0].split('_')[-1] + '0'); 
+        except: self.integration_time =   int(dir.split('0_us')[0].split('_')[-1] + '0'); 
 
 
     def set_batch(self,batch=2):
@@ -222,11 +256,26 @@ class FTSDataset(Dataset):
     def __getitem__(self, index):
 
         x = self.data * self.spectra[:,index].permute(1,0).unsqueeze(-1).unsqueeze(-1)
-        y = torch.stack([torch.from_numpy(np.load(self.dir + 'piezopos_' + str(i) + '.npy').astype(np.float32)/ 4096) for i in self.positions[index]],dim = 0) 
+        y = torch.stack([torch.from_numpy( rotate(np.load(self.dir + 'piezopos_' + str(i) + '.npy').astype(np.float32), angle=self.angle )) for i in self.positions[index]],dim = 0) # - 0.0002 # removing background noise?
+        
+        # y[y<15] = 0 #threshold
+        # y = y/(2**12 ) /self.integration_time
+   
+        y = y/self.integration_time
 
-        if self.crop:
+        if self.random_shifts:
+            roll_i, roll_j = np.random.randint(-7,7), np.random.randint(-7,7)
+
+            x = torch.roll(x, shifts=(roll_i,roll_j), dims=(2, 3))
+            y = torch.roll(y, shifts=(roll_i,roll_j), dims=(1, 2))
+
+        if self.crop != False:
             nx,ny = x.shape[2:]
-            x = x[...,nx//2 - 320 : nx//2+320,ny//2 - 320 : ny//2+320]
+            cropx = self.crop[0] // 2
+            cropy = self.crop[1] // 2
+
+            x = x[...,nx//2 - cropx : nx//2+cropx,ny//2 - cropy : ny//2+cropy]
+
         
         return y, x
     
@@ -259,7 +308,7 @@ class HDF5Dataset(Dataset):
 ###########################################################################################
 
 
-def create_bs_data(desired_channels, kernel, fts_dir, cube_dir = None, interp_type='average', device='cuda'):
+def create_bs_data(desired_channels, fts_dir, cube=None, desired_range=[700,900], cube_dir = None, interp_type='average', device='cuda'):
     '''
     This is ugly so put it in a function. 
 
@@ -274,66 +323,67 @@ def create_bs_data(desired_channels, kernel, fts_dir, cube_dir = None, interp_ty
     '''
     print('collecting the undispersed cube and spectra.')
 
-    ###load the cube###
-    anasubdir = fts_dir.split('data')
-    anasubdir = anasubdir[0] + 'analysis' + anasubdir[1]
 
-    anadir = '/project/agdoepp/Experiment/Hyperspectral_Calibration_FTS/'+anasubdir + '/'
+    cube_dir = '/project/agdoepp/Experiment/Hyperspectral_Calibration_FTS/'+cube_dir + '/'
     datadir = '/project/agdoepp/Experiment/Hyperspectral_Calibration_FTS/'+fts_dir + '/'
     
-    if cube_dir is None:
-        cube_dir = anadir
-        cube_dir_stat = 'copy'
-    else:
-        cube_dir  = '/project/agdoepp/Experiment/Hyperspectral_Calibration_FTS/'+cube_dir + '/'
-        cube_dir_stat = 'real'
+
+    if '0us' in cube_dir: integration_time = int(cube_dir.split('0us')[0].split('_')[-1] + '0')
+    elif '0_us' in cube_dir: integration_time = int(cube_dir.split('0_us')[0].split('_')[-1] + '0')
 
     ###load the cube and FTS spectra###
     undisp_cube = load_cube(cube_dir)
     spectras = np.load(datadir+'spectra.npy') 
+    try: initial_bins = np.load(cube_dir+'wavls_padded_fixed_thresholded.npy')
+    except: 
+        try: 
+            initial_bins = np.load(cube_dir+'wavls_padded_fixed.npy')
+        except: initial_bins = np.load(cube_dir+'wavls_padded.npy')
 
     ###interpolate to desired channels###
-    undisp_cube = downsample_signal(undisp_cube, desired_channels, interp_axis = 2, interp_type=interp_type) #interpolate to 750-850nm
-    spectras = downsample_signal(spectras, desired_channels, initial_range=[345.114169, 1036.5037173765845], interp_axis = 0, interp_type=interp_type) #interpolate to 750-850nm
-
-    #if cube_dir is copied, then we should just take the central region of it as the true cube (the undispersed)
-    if cube_dir_stat == 'copy':
-        zeros = np.zeros_like(undisp_cube)
-        sx,sy = undisp_cube.shape[:2]
-        zeros[sx//2 - 320 : sx//2+320,sy//2 - 320 : sy//2+320] = undisp_cube[sx//2 - 320 : sx//2+320,sy//2 - 320 : sy//2+320]
-        undisp_cube = zeros
-
-
-    try:
-        dispersed_mask = torch.tensor(np.load(cube_dir+'dispersed_mask.npy')).float().to(device) #this needs changing also as I just made it by thresholding data.
-    except:
-        print('no mask found, creating one.')
-        mask = undisp_cube > 0.05 * undisp_cube.max() #this is a hack.
-        mask = np.transpose(mask[np.newaxis],(0,3,1,2))
-
-        mask = torch.tensor(mask)
-        dispersed_mask = torch.abs(fwd.fourier.method.disperser.disperse_all_orders(mask,kernel.to('cpu')))
-        dispersed_mask[dispersed_mask<0.01] = 0
-        dispersed_mask[dispersed_mask>0] = 1
-
-        np.save(anadir+'dispersed_mask.npy',dispersed_mask.numpy())
-        dispersed_mask = torch.tensor(dispersed_mask).to(device)
+    undisp_cube = downsample_signal(undisp_cube, desired_channels, initial_bins, interp_axis = 2, desired_range = desired_range, interp_type=interp_type) #interpolate to 750-850nm
+    
+    initial_bins = np.linspace(634.69, 1124.5, spectras.shape[0])*1e-9
+    spectras = downsample_signal(spectras, desired_channels, initial_bins, desired_range = desired_range, interp_axis = 0, interp_type=interp_type) #interpolate to 750-850nm
 
     ###normalize and send to cuda###
-    undisp_cube = torch.tensor(normalize(undisp_cube)).float().permute(2,0,1).unsqueeze(0).to(device)
-    spectras = torch.tensor(normalize(spectras)).float().to(device)
-
-    return undisp_cube, dispersed_mask, spectras
-
+    undisp_cube = torch.tensor(normalize(undisp_cube, integration_time)).float().permute(2,0,1).unsqueeze(0).to(device)
+    spectras = torch.tensor(spectras).float().to(device)
+    spectras = (spectras - spectras.min()) / (spectras.max() - spectras.min()) #normalize the spectra individually between 0 and 1
 
 
-
-def normalize(data):
-    return (data - np.min(data)) / (np.max(data) - np.min(data))
-
+    # if cube is not None:
+    #     undisp_cube = cube
 
 
-def downsample_signal(data, desired_channels, initial_range = [700,900], desired_range = [750,850], interp_axis = -1, interp_type='nearest'):
+    # mask = undisp_cube > (0.05 * undisp_cube.max()) #this is a hack.
+
+    # dispersed_mask = torch.abs(fwd.fourier.method.disperser.disperse_all_orders(mask.cpu(),kernel.cpu()))
+    # dispersed_mask[dispersed_mask<0.01 * dispersed_mask.max() ] = 0
+    # dispersed_mask[dispersed_mask>0] = 1
+
+    # np.save(cube_dir+'dispersed_mask.npy',dispersed_mask.numpy())
+    # dispersed_mask = torch.tensor(dispersed_mask).to(device)
+
+    
+    return undisp_cube, spectras#dispersed_mask
+
+
+# def threshold(data):
+#     # return data
+#     datamax = np.max(data)
+#     data[data<0.001*datamax] = 0
+#     return data
+
+
+def normalize(data, integration_time):
+    # return data
+    return data / integration_time/ 5
+    # return (data - np.min(data)) / (np.max(data) - np.min(data))
+
+
+
+def downsample_signal(data, desired_channels, initial_bins, desired_range = [700,900], interp_axis = -1, interp_type='nearest'):
     '''
     TO BE RENAMED to DOWNSAMPLE_SIGNAL
     simplest possible example.
@@ -342,11 +392,8 @@ def downsample_signal(data, desired_channels, initial_range = [700,900], desired
     interp_type is the type of interpolation. Can be 'nearest'(fast) or 'average'(slow)
     '''
 
-    if interp_axis==-1:
-        interp_axis = len(data.shape)-1
+    if interp_axis==-1:    interp_axis = len(data.shape)-1
     
-    actual_bins = np.linspace(initial_range[0],initial_range[1],data.shape[interp_axis]) * 1e-9 
-
     desired_bins = np.linspace(desired_range[0],desired_range[1],desired_channels)*1e-9
 
     
@@ -354,7 +401,7 @@ def downsample_signal(data, desired_channels, initial_range = [700,900], desired
     if interp_type == 'nearest':
         idx = np.zeros_like(desired_bins,dtype=int)
         for i in np.arange(len(desired_bins)):
-            idx[i] = (np.abs(actual_bins - desired_bins[i])).argmin() #just find the closest one. (can replace with mean or something)
+            idx[i] = (np.abs(initial_bins - desired_bins[i])).argmin() #just find the closest one. (can replace with mean or something)
         newdata = np.take(data,idx,axis=interp_axis)
 
     elif interp_type == 'average':
@@ -365,51 +412,169 @@ def downsample_signal(data, desired_channels, initial_range = [700,900], desired
         dlambda = (desired_bins[1] - desired_bins[0])/2
 
         for i in np.arange(desired_channels):
-            idx = np.where((actual_bins > desired_bins[i] - dlambda) * (actual_bins<desired_bins[i]+dlambda)) [0]
+            idx = np.where((initial_bins > desired_bins[i] - dlambda) * (initial_bins<desired_bins[i]+dlambda)) [0]
             indices = tuple([i if j==interp_axis else slice(None) for j in range(len(newshape))])
             newdata[indices] = np.mean(np.take(data,idx,axis=interp_axis),axis=interp_axis)
 
     return newdata
 
+
+
 def load_cube(anadir):
-    signalfft_center = np.load(anadir+'signalfft_padded_center.npy')
-    signalfft_left = np.load(anadir+'signalfft_padded_left.npy')
-    signalfft_right = np.load(anadir+'signalfft_padded_right.npy')
+
+    try:
+        signalfft_center = np.load(anadir+'signalfft_padded_center_fixed_thresholded.npy')
+        signalfft_left = np.load(anadir+'signalfft_padded_left_fixed_thresholded.npy')
+        signalfft_right = np.load(anadir+'signalfft_padded_right_fixed_thresholded.npy')
+    except:        
+        try:
+            signalfft_center = np.load(anadir+'signalfft_padded_center.npy')
+            signalfft_left = np.load(anadir+'signalfft_padded_left.npy')
+            signalfft_right = np.load(anadir+'signalfft_padded_right.npy')
+        except:
+            signalfft_center = np.load(anadir+'signalfft_padded_center_fixed.npy')
+            signalfft_left = np.load(anadir+'signalfft_padded_left_fixed.npy')
+            signalfft_right = np.load(anadir+'signalfft_padded_right_fixed.npy')
+
     undisp_cube = np.concatenate((signalfft_left,signalfft_center,signalfft_right),axis = 1) 
     return undisp_cube
 
 
 
-def center_cubes(nograting_cube, grating_cube):
+def center_cubes(nograting_cube, grating_cube, device='cpu'):
     '''
     given a cube without grating and one with grating, match the locations of the fundamental.
     '''
 
-    sx,sy = nograting_cube.shape[2:]
+    #first center the position of the fundamental in the grating cube
+    sx,sy = grating_cube.shape[2:]
 
-    center_x, center_y = torch.sum(nograting_cube[0],dim=(0,2)).argmax(), torch.sum(nograting_cube[0],dim=(0,1)).argmax()
+    center_x = torch.sum(grating_cube[0,:,sx//2-200:sx//2+200,sy//2-400:sy//2+400],dim=(0,2)).argmax() + sx//2-200
+    center_y  = torch.sum(grating_cube[0,:,sx//2-200:sx//2+200,sy//2-400:sy//2+400],dim=(0,1)).argmax() + sy//2-400
 
     rollx = (center_x-sx//2,center_y-sy//2)
+    print('to center grating we move by = ' + str(rollx))
 
     pointspot = sx//2  + rollx[0]   , sy//2+ rollx[1]
 
-    size = 50 //2
+    grating_cube = torch.roll(grating_cube, shifts=(-rollx[0],-rollx[1]), dims=(2, 3)) # shift them both to the center of grating_cube
+    nograting_cube = torch.roll(nograting_cube, shifts=(-rollx[0],-rollx[1]), dims=(2, 3))
 
+    nograting_cube = shift_nograting_to_grating(nograting_cube, grating_cube, y_range=[0,500], device=device)
 
-    nograting_cube_rolled = torch.roll(nograting_cube, shifts=(-rollx[0],-rollx[1]), dims=(2, 3))
-    grating_cube_rolled = torch.roll(grating_cube, shifts=(-rollx[0],-rollx[1]), dims=(2, 3)) # shift them both to the center of nograting_cube
-
-    pointspot = sx//2    , sy//2
-
-
-    grating_maxloc = torch.stack(torch.where(torch.sum(grating_cube_rolled[0,:,pointspot[0]-size:pointspot[0]+size+1,pointspot[1]-size:pointspot[1]+size+1].cpu().detach(),dim=0) == torch.sum(grating_cube_rolled[0,:,pointspot[0]-size:pointspot[0]+size+1,pointspot[1]-size:pointspot[1]+size+1].cpu().detach(),dim=0).max()))
-    nograting_maxloc = torch.stack(torch.where(torch.sum(nograting_cube_rolled[0,:,pointspot[0]-size:pointspot[0]+size+1,pointspot[1]-size:pointspot[1]+size+1].cpu().detach(),dim=0) == torch.sum(nograting_cube_rolled[0,:,pointspot[0]-size:pointspot[0]+size+1,pointspot[1]-size:pointspot[1]+size+1].cpu().detach(),dim=0).max()))
-
-    delta_pos = nograting_maxloc -  grating_maxloc  
-
-    grating_cube_rolled = torch.roll(grating_cube_rolled, shifts=(delta_pos[0].numpy()[0],delta_pos[1].numpy()[0]), dims=(2, 3)) # shift the grating cube to the difference
-
-    grating_cube = grating_cube_rolled
-    nograting_cube = nograting_cube_rolled
 
     return nograting_cube, grating_cube
+
+
+
+def shift_funda_of_grating(grating_cube, wl_range, y_range):
+    #for some reason there seems to be a problem with the fundamental 
+    CoM_y_l, CoM_x_l = CenterOfMassLoss.calculate_center_of_mass(grating_cube[0,wl_range[0]:wl_range[1]], region = np.array([[y_range[0],y_range[1]],[0,700]])).mean(0).cpu()
+
+    CoM_y_c, CoM_x_c = CenterOfMassLoss.calculate_center_of_mass(grating_cube[0,wl_range[0]:wl_range[1]], region = np.array([[y_range[0],y_range[1]],[1200,1300]])).mean(0).cpu()
+    CoM_y_c, CoM_x_c = CoM_y_c + y_range[0], CoM_x_c + 1200
+
+    CoM_y_r, CoM_x_r = CenterOfMassLoss.calculate_center_of_mass(grating_cube[0,wl_range[0]:wl_range[1]], region = np.array([[y_range[0],y_range[1]],[1550,2250]])).mean(0).cpu()
+    CoM_y_r, CoM_x_r = CoM_y_r + y_range[0], CoM_x_r + 1550
+    print(CoM_y_r, CoM_y_l, CoM_y_c)
+
+
+    shiftit =   (CoM_y_r + CoM_y_l) // 2  - CoM_y_c
+
+    print('to shift funda of grating we move by = ' + str(shiftit.numpy()))
+
+
+    grating_funda = grating_cube[:,:,y_range[0]:y_range[1], int(CoM_x_c)-200:int(CoM_x_c)+200]
+    
+    grating_funda = torch.tensor(scipy.ndimage.shift(grating_funda.cpu(), shift = (0,0,shiftit,0), order = 1)).to(device)
+
+
+    grating_cube[:,:,y_range[0]:y_range[1], int(CoM_x_c)-200:int(CoM_x_c)+200] = grating_funda
+
+    CoM_y_c, CoM_x_c = CenterOfMassLoss.calculate_center_of_mass(grating_cube[0,wl_range[0]:wl_range[1]], region = np.array([[y_range[0],y_range[1]],[1200,1300]])).mean(0).cpu()
+    CoM_y_c, CoM_x_c = CoM_y_c + y_range[0], CoM_x_c + 1200
+    print(CoM_y_c, CoM_x_c)
+
+    return grating_cube
+
+def sub_nogratingfunda(nograting_cube,grating_cube):
+    sx,sy = nograting_cube.shape[-2:]
+    spatial_funda = grating_cube[:,:,sx//2-200:sx//2+200, sy//2-200:sy//2+200]
+
+    ngspectra = torch.mean(nograting_cube[:,:,sx//2-200:sx//2+200, sy//2-200:sy//2+200],dim=(0,2,3)).unsqueeze(0).unsqueeze(2).unsqueeze(3)
+    gspectra = torch.mean(grating_cube[:,:,sx//2-200:sx//2+200, sy//2-200:sy//2+200],dim=(0,2,3)).unsqueeze(0).unsqueeze(2).unsqueeze(3)
+
+    nograting_cube[...,sx//2-200:sx//2+200,sy//2-200:sy//2+200] = spatial_funda*ngspectra/gspectra
+    return nograting_cube
+
+
+def shift_nograting_to_grating(nograting_cube, grating_cube, y_range, device='cpu'):
+
+
+    region = np.array([[y_range[0],y_range[1]],[1000,1340]])
+    CoM_nog = CenterOfMassLoss.calculate_center_of_mass(nograting_cube[0],region).mean(0)
+    CoM_g = CenterOfMassLoss.calculate_center_of_mass(grating_cube[0],region).mean(0)
+
+    # shiftdown = torch.floor(CoM_g - CoM_nog).cpu().int()
+    # shiftup = torch.ceil(CoM_g - CoM_nog).cpu().int()
+
+    shifts = (CoM_g - CoM_nog).cpu()
+
+    print('to shift nograting to grating we move by = ' + str(shifts.numpy()))
+
+    result = torch.tensor(scipy.ndimage.shift(nograting_cube.cpu(), shift = (0,0,shifts[0],shifts[1]), order = 1)).to(device)
+
+    return result# (torch.roll(nograting_cube,tuple(shiftdown.numpy()),dims=(2,3)) + torch.roll(nograting_cube,tuple(shiftup.numpy()),dims=(2,3))) / 2
+
+def remove_rotation(kernel, y_range = [0,100], wl_range=[0,41], verbose=False):
+    
+    mid = y_range[0] + (y_range[1]-y_range[0])//2
+
+    if verbose:
+        fig,ax = plt.subplots(1,3,dpi=200)
+        ax[0].imshow(torch.sum((kernel)[0,wl_range[0]:wl_range[1]],dim=0).cpu().detach().numpy()[y_range[0]:y_range[1],250:450],vmax=0.00001)
+        ax[1].imshow(torch.sum((kernel)[0,wl_range[0]:wl_range[1]],dim=0).cpu().detach().numpy()[y_range[0]:y_range[1], 1200:1300],vmax=0.00001)
+        ax[2].imshow(torch.sum((kernel)[0,wl_range[0]:wl_range[1]],dim=0).cpu().detach().numpy()[y_range[0]:y_range[1], 2000:2200],vmax=0.00001)
+        ax[0].plot(np.arange(100),np.ones(100)*mid,'r',markersize=0.05)
+        ax[1].plot(np.arange(100),np.ones(100)*mid,'r',markersize=0.05)
+        ax[2].plot(np.arange(100),np.ones(100)*mid,'r',markersize=0.05)
+
+
+
+    CoM_y_l, CoM_x_l = CenterOfMassLoss.calculate_center_of_mass(kernel[0,wl_range[0]:wl_range[1]], region = np.array([[y_range[0],y_range[1]],[0,700]])).mean(0).cpu()
+    print(CoM_x_l,CoM_y_l)
+    CoM_y_c, CoM_x_c = CenterOfMassLoss.calculate_center_of_mass(kernel[0,wl_range[0]:wl_range[1]], region = np.array([[y_range[0],y_range[1]],[1200,1300]])).mean(0).cpu()
+    CoM_y_c, CoM_x_c = CoM_y_c + y_range[0], CoM_x_c + 1200
+    print(CoM_x_c,CoM_y_c)
+    CoM_y_r, CoM_x_r = CenterOfMassLoss.calculate_center_of_mass(kernel[0,wl_range[0]:wl_range[1]], region = np.array([[y_range[0],y_range[1]],[1550,2250]])).mean(0).cpu()
+    CoM_y_r, CoM_x_r = CoM_y_r + y_range[0], CoM_x_r + 1550
+    print(CoM_x_r,CoM_y_r)
+
+    angle = np.arctan((CoM_y_r-CoM_y_l)/(CoM_x_r-CoM_x_l))
+
+    from skimage.transform import rotate
+
+    rot_kernel = torch.tensor(np.stack([rotate(kernel[0,i].cpu().numpy(),angle=angle*180/np.pi) for i in range(kernel.shape[1])])).unsqueeze(0)
+
+    if verbose:
+        fig,ax = plt.subplots(1,3,dpi=200)
+        ax[0].imshow(torch.sum((rot_kernel)[0],dim=0).cpu().detach().numpy()[y_range[0]:y_range[1],150:450],vmax=0.00001)
+        ax[1].imshow(torch.sum((rot_kernel)[0],dim=0).cpu().detach().numpy()[y_range[0]:y_range[1], 1200:1300],vmax=0.00001)
+        ax[2].imshow(torch.sum((rot_kernel)[0],dim=0).cpu().detach().numpy()[y_range[0]:y_range[1], 2000:2300],vmax=0.00001)
+        ax[0].plot(np.arange(100),np.ones(100)*mid,'r',markersize=0.05)
+        ax[1].plot(np.arange(100),np.ones(100)*mid,'r',markersize=0.05)
+        ax[2].plot(np.arange(100),np.ones(100)*mid,'r',markersize=0.05)
+
+    CoM_y_l, CoM_x_l = CenterOfMassLoss.calculate_center_of_mass(rot_kernel[0,wl_range[0]:wl_range[1]], region = np.array([[y_range[0],y_range[1]],[0,700]])).mean(0).cpu()
+    print(CoM_x_l,CoM_y_l)
+    CoM_y_c, CoM_x_c = CenterOfMassLoss.calculate_center_of_mass(rot_kernel[0,wl_range[0]:wl_range[1]], region = np.array([[y_range[0],y_range[1]],[1200,1300]])).mean(0).cpu()
+    CoM_y_c, CoM_x_c = CoM_y_c + y_range[0], CoM_x_c + 1200
+    print(CoM_x_c,CoM_y_c)
+    CoM_y_r, CoM_x_r = CenterOfMassLoss.calculate_center_of_mass(rot_kernel[0,wl_range[0]:wl_range[1]], region = np.array([[y_range[0],y_range[1]],[1550,2250]])).mean(0).cpu()
+    CoM_y_r, CoM_x_r = CoM_y_r + y_range[0], CoM_x_r + 1550
+    print(CoM_x_r,CoM_y_r)
+
+
+    return rot_kernel
+
+# kernel = remove_rotation(kernel, verbose=True).to(device)

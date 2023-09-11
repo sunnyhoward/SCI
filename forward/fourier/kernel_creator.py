@@ -9,7 +9,10 @@ import torch.nn as nn
 
 
 
-def create_fourier_kernel(desired_channels=21):
+def create_fourier_kernel(desired_channels=21, desired_range=[700,900], one_grating=False):
+
+    ''' create a kernel from Jannik's measurements. Then feed it into the kernel_learner script to get the final kernel. '''
+
 
     path_share = '/project/agdoepp/Experiment/Hyperspectral_Calibration_FTS/'
 
@@ -41,6 +44,8 @@ def create_fourier_kernel(desired_channels=21):
     size_y = 2448
 
 
+    # gratings_intensity_modulations = gratings_intensity_modulations + gratings_intensity_modulations.max() * 0.000001
+
     intensity_zero_order = gratings_intensity_modulations[4]
     intensity_polgrat_bottom = gratings_intensity_modulations[7]
     intensity_polgrat_top = gratings_intensity_modulations[1]
@@ -67,7 +72,7 @@ def create_fourier_kernel(desired_channels=21):
         shift_instance_y_minor = (shift_vertical_800_minor+additional_shift_vertical_minor)
         shift_instance_x_minor = (shift_horizontal_800_minor+additional_shift_horizontal_minor)
 
-        ninecopyconvolution[center_x, center_y, i] += intensity_zero_order[i]
+        ninecopyconvolution[center_x, center_y, i] += 1#intensity_zero_order[i]
         
         ninecopyconvolution[center_x - int(np.floor(shift_instance_x)), center_y + int(np.floor(shift_instance_y_minor)), i] += (1-(shift_instance_x%1)) * (1-(shift_instance_y_minor%1)) * intensity_polgrat_bottom[i]
         ninecopyconvolution[center_x - int(np.ceil(shift_instance_x)), center_y + int(np.floor(shift_instance_y_minor)), i] += (shift_instance_x%1) * (1-(shift_instance_y_minor%1)) * intensity_polgrat_bottom[i]
@@ -80,15 +85,15 @@ def create_fourier_kernel(desired_channels=21):
         ninecopyconvolution[center_x + int(np.floor(shift_instance_x)), center_y - int(np.ceil(shift_instance_y_minor)), i] += (1-(shift_instance_x%1)) * (shift_instance_y_minor%1) * intensity_polgrat_top[i]
         ninecopyconvolution[center_x + int(np.ceil(shift_instance_x)), center_y - int(np.ceil(shift_instance_y_minor)), i] += (shift_instance_x%1) * (shift_instance_y_minor%1) * intensity_polgrat_top[i]
 
-        ninecopyconvolution[center_x + int(np.floor(shift_instance_x_minor)), center_y - int(np.floor(shift_instance_y)), i] += (1-(shift_instance_x_minor%1)) * (1-(shift_instance_y%1)) * intensity_grat_left[i]
-        ninecopyconvolution[center_x + int(np.ceil(shift_instance_x_minor)), center_y - int(np.floor(shift_instance_y)), i] += (shift_instance_x_minor%1) * (1-(shift_instance_y%1)) * intensity_grat_left[i]
-        ninecopyconvolution[center_x + int(np.floor(shift_instance_x_minor)), center_y - int(np.ceil(shift_instance_y)), i] += (1-(shift_instance_x_minor%1)) * (shift_instance_y%1) * intensity_grat_left[i]
-        ninecopyconvolution[center_x + int(np.ceil(shift_instance_x_minor)), center_y - int(np.ceil(shift_instance_y)), i] += (shift_instance_x_minor%1) * (shift_instance_y%1) * intensity_grat_left[i]
+        ninecopyconvolution[center_x + int(np.floor(shift_instance_x_minor)), center_y - int(np.floor(shift_instance_y)), i] += (1-(shift_instance_x_minor%1)) * (1-(shift_instance_y%1)) #* intensity_grat_left[i]
+        ninecopyconvolution[center_x + int(np.ceil(shift_instance_x_minor)), center_y - int(np.floor(shift_instance_y)), i] += (shift_instance_x_minor%1) * (1-(shift_instance_y%1)) #* intensity_grat_left[i]
+        ninecopyconvolution[center_x + int(np.floor(shift_instance_x_minor)), center_y - int(np.ceil(shift_instance_y)), i] += (1-(shift_instance_x_minor%1)) * (shift_instance_y%1) #* intensity_grat_left[i]
+        ninecopyconvolution[center_x + int(np.ceil(shift_instance_x_minor)), center_y - int(np.ceil(shift_instance_y)), i] += (shift_instance_x_minor%1) * (shift_instance_y%1) #* intensity_grat_left[i]
 
-        ninecopyconvolution[center_x - int(np.floor(shift_instance_x_minor)), center_y + int(np.floor(shift_instance_y)), i] += (1-(shift_instance_x_minor%1)) * (1-(shift_instance_y%1)) * intensity_grat_right[i]
-        ninecopyconvolution[center_x - int(np.ceil(shift_instance_x_minor)), center_y + int(np.floor(shift_instance_y)), i] += (shift_instance_x_minor%1) * (1-(shift_instance_y%1)) * intensity_grat_right[i]
-        ninecopyconvolution[center_x - int(np.floor(shift_instance_x_minor)), center_y + int(np.ceil(shift_instance_y)), i] += (1-(shift_instance_x_minor%1)) * (shift_instance_y%1) * intensity_grat_right[i]
-        ninecopyconvolution[center_x - int(np.ceil(shift_instance_x_minor)), center_y + int(np.ceil(shift_instance_y)), i] += (shift_instance_x_minor%1) * (shift_instance_y%1) * intensity_grat_right[i]
+        ninecopyconvolution[center_x - int(np.floor(shift_instance_x_minor)), center_y + int(np.floor(shift_instance_y)), i] += (1-(shift_instance_x_minor%1)) * (1-(shift_instance_y%1)) #* intensity_grat_right[i]
+        ninecopyconvolution[center_x - int(np.ceil(shift_instance_x_minor)), center_y + int(np.floor(shift_instance_y)), i] += (shift_instance_x_minor%1) * (1-(shift_instance_y%1)) #* intensity_grat_right[i]
+        ninecopyconvolution[center_x - int(np.floor(shift_instance_x_minor)), center_y + int(np.ceil(shift_instance_y)), i] += (1-(shift_instance_x_minor%1)) * (shift_instance_y%1) #* intensity_grat_right[i]
+        ninecopyconvolution[center_x - int(np.ceil(shift_instance_x_minor)), center_y + int(np.ceil(shift_instance_y)), i] += (shift_instance_x_minor%1) * (shift_instance_y%1) #* intensity_grat_right[i]
 
         ninecopyconvolution[center_x - int(np.floor(shift_instance_x-shift_instance_x_minor)), center_y - int(np.floor(shift_instance_y-shift_instance_y_minor)), i] += (1-((shift_instance_x-shift_instance_x_minor)%1)) * (1-((shift_instance_y-shift_instance_y_minor)%1)) * intensity_bottom_left[i]
         ninecopyconvolution[center_x - int(np.ceil(shift_instance_x-shift_instance_x_minor)), center_y - int(np.floor(shift_instance_y-shift_instance_y_minor)), i] += ((shift_instance_x-shift_instance_x_minor)%1) * (1-((shift_instance_y-shift_instance_y_minor)%1)) * intensity_bottom_left[i]
@@ -111,8 +116,21 @@ def create_fourier_kernel(desired_channels=21):
         ninecopyconvolution[center_x + int(np.ceil(shift_instance_x-shift_instance_x_minor)), center_y + int(np.ceil(shift_instance_y-shift_instance_y_minor)), i] += ((shift_instance_x-shift_instance_x_minor)%1) * ((shift_instance_y-shift_instance_y_minor)%1) * intensity_top_right[i]
 
 
-    ninecopyconvolution = torch.tensor(downsample_signal(ninecopyconvolution.numpy(), desired_channels=desired_channels, initial_range=[700,900], desired_range=[750,850], interp_axis=-1, interp_type='average')).float()
+    if type(desired_channels) == int:
+        ninecopyconvolution = torch.tensor(downsample_signal(ninecopyconvolution.numpy(), desired_channels=desired_channels, initial_bins=wavelengths*1e-9, desired_range=desired_range, interp_axis=-1, interp_type='average')).float()
+    else:
+        initial_bins=wavelengths
+        ninecopyconvolution = ninecopyconvolution[...,((initial_bins>desired_range[0]) & (initial_bins<desired_range[1]))]
 
 
-    ninecopyconvolution = ninecopyconvolution / torch.sum(ninecopyconvolution,dim=(0,1))
+    # ninecopyconvolution = ninecopyconvolution / torch.sum(ninecopyconvolution,dim=(0,1))
+
+    if one_grating!=False: #in this case one_grating describes the size
+        
+        start_index = int(size_x / 2) - int(one_grating / 2)
+        end_index = start_index + one_grating
+
+        ninecopyconvolution = ninecopyconvolution[start_index:end_index]
+
+
     return ninecopyconvolution.unsqueeze(0).permute(0,3,1,2)
