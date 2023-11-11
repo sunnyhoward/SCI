@@ -60,7 +60,7 @@ class disperser:
     def _disperse_all_orders(cube, kernel, pad=True,real_part=True):
         nx,ny = cube.shape[2:]
         if pad:
-            pad_x = int(np.ceil(nx/2))
+            pad_x = int(np.ceil(nx/2)) if nx!=1 else 0
             pad_y = int(np.ceil(ny/2))
 
             cube = torch.nn.functional.pad(cube,(pad_y,pad_y,pad_x,pad_x))
@@ -77,12 +77,12 @@ class disperser:
 
         if real_part:
             cube_disp = torch.real(cube_disp)
+            cube_disp = torch.clamp(cube_disp, min=0)
 
         if pad:
-            cube_disp = cube_disp[:,:,pad_x:-pad_x,pad_y:-pad_y]
+            cube_disp = cube_disp[:,:,pad_x:-pad_x,pad_y:-pad_y] if pad_x!=0 else cube_disp[:,:,:,pad_y:-pad_y]
         return cube_disp
     
-
 
 
     @staticmethod
@@ -94,9 +94,11 @@ class disperser:
     def _undisperse_all_orders(cube, kernel, wiener = False, pad=True, real_part = True,  **kwargs):
         
         nx,ny = cube.shape[2:]
-        if pad:
-            pad_x = int(np.ceil(nx/2))
-            pad_y = int(np.ceil(ny/2))
+        if pad!=False:
+            if pad==True: padfac = 0.5
+            else: padfac = pad
+            pad_x = int(np.ceil(padfac*nx)) if nx!=1 else 0
+            pad_y = int(np.ceil(padfac*ny))
 
             cube = torch.nn.functional.pad(cube,(pad_y,pad_y,pad_x,pad_x))
             kernel = torch.nn.functional.pad(kernel,(pad_y,pad_y,pad_x,pad_x))
@@ -114,11 +116,12 @@ class disperser:
 
         cube_undisp=(torch.fft.ifft2(f_cube_undisp)) #or abs
 
-        if real_part:
+        if real_part: #if not maybe we are propagating
             cube_undisp = torch.real(cube_undisp)
+            cube_undisp = torch.clamp(cube_undisp, min=0)
 
-        if pad:
-            cube_undisp = cube_undisp[:,:,pad_x:-pad_x,pad_y:-pad_y]
+        if pad!=False:
+            cube_undisp = cube_undisp[:,:,pad_x:-pad_x,pad_y:-pad_y] if pad_x!=0 else cube_undisp[:,:,:,pad_y:-pad_y]
 
         return cube_undisp
         

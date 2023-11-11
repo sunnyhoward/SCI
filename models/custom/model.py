@@ -15,7 +15,7 @@ class FourierDenoiser(nn.Module):
     Input: mask - the predispersed mask-cube (bs,nc,nx,ny)
     """
 
-    def __init__(self, kernel, channels, CoordGate=True, trainable_kernel=False, cropsize = [640,640], name=None):
+    def __init__(self, kernel, channels, mask=None, CoordGate=True, trainable_kernel=False, cropsize = [640,640], name=None):
         super().__init__()
 
         self.trainable_kernel = trainable_kernel
@@ -25,11 +25,12 @@ class FourierDenoiser(nn.Module):
         if trainable_kernel:
             
             self.kernel_learner = KernelLearner(self.kernel,  name='kernel_learner')
-
+        
+        self.mask = mask  #if we are adjusting the kernel we need to make a new mask each time
         
         self.relu = nn.ReLU()
         
-        # self.mask = mask
+        
         
         self.wiener_noise = nn.Parameter(torch.tensor([1e-3]),requires_grad=True)
 
@@ -49,35 +50,20 @@ class FourierDenoiser(nn.Module):
         Input: the measurement - (batch_size, nx, ny)
         '''
 
+
         kernel = self.kernel_learner.fill_kernel() if self.trainable_kernel else self.kernel
-        mask = self.make_mask(x,kernel)
+        mask = self.make_mask(x,kernel, self.cropsize) if self.mask == None else self.mask
+
         x = self.data_term(x, kernel, mask)   
-        x = self.crop(x)
+
+        x = self.crop(x, self.cropsize)
+
         x = self.unet(x)
 
         return x
 
 
-    def make_mask(self,x,kernel):
-        #x is measurement
-
-        nx,ny = x.shape[-2:]
-        mask = torch.zeros_like(x)
-        cropx = self.cropsize[0]//2
-        cropy = self.cropsize[1]//2
-
-        x_cropped = self.crop(x)
-        mask[...,nx//2 - cropx : nx//2+cropx,ny//2 - cropy : ny//2+cropy] = x_cropped > (0.05 * x_cropped.max()) #this is a hack.
-        mask = mask.unsqueeze(1).tile(1,kernel.shape[1],1,1)
-
-        dispersed_mask = disperser.disperse_all_orders(mask,kernel)
-        dispersed_mask[dispersed_mask<0.01 * dispersed_mask.max() ] = 0
-        dispersed_mask[dispersed_mask>0] = 1
-
-        return dispersed_mask
-     
-
-
+    
     def data_term(self,x,kernel,mask):
         
         self.shift_info = {'kernel':kernel}
@@ -85,10 +71,31 @@ class FourierDenoiser(nn.Module):
         return x
     
 
-    def crop(self,x):
+    @staticmethod
+    def make_mask(x,kernel,cropsize):
+        #x is measurement
+
         nx,ny = x.shape[-2:]
-        cropx = self.cropsize[0]//2
-        cropy = self.cropsize[1]//2
+        mask = torch.zeros_like(x)
+        cropx = cropsize[0]//2
+        cropy = cropsize[1]//2
+
+        x_cropped = FourierDenoiser.crop(x, cropsize)
+        mask[...,nx//2 - cropx : nx//2+cropx,ny//2 - cropy : ny//2+cropy] = x_cropped > (0.005 * x_cropped.max()) #this is a hack.
+        mask = mask.unsqueeze(1).tile(1,kernel.shape[1],1,1)
+
+        dispersed_mask = disperser.disperse_all_orders(mask,kernel)
+        bla = torch.stack([dispersed_mask[:,i] > dispersed_mask[:,i].mean() * 0.005 for i in range(dispersed_mask.shape[1])] , dim=1)
+        dispersed_mask[bla] = 1
+        dispersed_mask[dispersed_mask != 1] = 0
+        return dispersed_mask
+    
+    
+    @staticmethod
+    def crop(x,cropsize):
+        nx,ny = x.shape[-2:]
+        cropx = cropsize[0]//2
+        cropy = cropsize[1]//2
 
         return x[...,nx//2 - cropx : nx//2+cropx,ny//2 - cropy : ny//2+cropy]
      
@@ -122,7 +129,7 @@ class CG_UNet(nn.Module):
         for i in range(n_levels-1): 
             
             
-            self.gates_down.append(CoordGate(3, 64, clist[i], size=sizes[i])) #the coordgate comes before the downsample
+            self.gates_down.append(CoordGate(encoding_layers=3, enc_channels=64, out_channels=clist[i], size=sizes[i])) #the coordgate comes before the downsample
 
             if i!=n_levels-2:
                 self.downs.append(Down(clist[i], clist[i+1],BN=BN))
@@ -130,13 +137,13 @@ class CG_UNet(nn.Module):
                 self.downs.append(Down(clist[i], clist[i+1]//factor,BN=BN))
 
 
-            self.gates_up.append(CoordGate(3, 64, clist[n_levels-1 -i]//factor, size=sizes[n_levels-1 -i])) #coordgate comes before the upsample.
+            self.gates_up.append(CoordGate(encoding_layers=3, enc_channels=64, out_channels=clist[n_levels-1 -i]//factor, size=sizes[n_levels-1 -i])) #coordgate comes before the upsample.
             self.ups.append(Up(clist[n_levels-1-i], clist[n_levels-1 -i-1]//factor, bilinear,BN=BN))
             size = torch.div(size, 2, rounding_mode='floor')
 
 
 
-        self.final_gate = CoordGate(3, 64, 64, size=init_size)
+        self.final_gate = CoordGate(encoding_layers=3, enc_channels=64, out_channels=64, size=init_size)
         self.outc = (OutConv(clist[0], n_classes))
 
 
@@ -160,6 +167,47 @@ class CG_UNet(nn.Module):
     
 
 
+class CG_convolution_layer(nn.Module):
+    '''
+    Single convolution layer with CoordGate
+
+    if three_d is true, they will share convolutions but not the coordgate.
+    '''
+    def __init__(self, n_channels_in, n_channels_out, n_channels_CG, kernelsize, init_size = [640,640],
+                 locally_connected=False,CG_type='pos', three_d=False,**kwargs):
+        super(CG_convolution_layer, self).__init__()
+        self.kernelsize = kernelsize
+
+        self.conv = nn.Conv2d(n_channels_in,n_channels_CG,kernelsize,padding=kernelsize//2)
+        if locally_connected:
+            self.create_locally_connected_conv(kernelsize)
+
+        if three_d:
+            channels = kwargs['channels']
+            self.CG = torch.nn.ModuleList([CoordGate(enc_channels=n_channels_CG, out_channels=n_channels_out, size=init_size, enctype=CG_type, **kwargs) for i in range(channels)])
+        else:
+            self.CG = CoordGate(enc_channels=n_channels_CG, out_channels=n_channels_out, size=init_size, enctype=CG_type, **kwargs)
+
+        self.three_d = three_d
+
+
+    def forward(self, x):
+        if self.three_d:
+            x = torch.concat([self.CG[i](self.conv(x[:,i])) for i in range(x.shape[1])],dim=1)
+        else:
+            x = self.CG(self.conv(x))
+        return x
+    
+    def create_locally_connected_conv(self,kernelsize):
+        locally_connected_kernel = torch.zeros((kernelsize**2,1,kernelsize,kernelsize))
+
+        for i in range(kernelsize):
+            for j in range(kernelsize):
+                locally_connected_kernel[i*kernelsize+j,0,i,j] = 1
+        self.conv.weight = nn.Parameter(locally_connected_kernel,requires_grad=False)
+
+
+
 
 class KernelLearner(nn.Module):
     """
@@ -172,10 +220,11 @@ class KernelLearner(nn.Module):
 
         self.kernel = kernel
 
+        self.lamb = nn.Parameter(torch.tensor([1e-4]),requires_grad=True)
             
         locations = findclusters(kernel,padding) #searches for places where the kernel is not zero and creates a mask
         self.locations = nn.Parameter(locations,requires_grad=False)
-        self.variable_kernel = nn.Parameter(kernel[0,locations] + 1e-6, requires_grad=True)
+        self.initialise_variable_kernel()
 
         self.relu = nn.ReLU()  #nn.LeakyReLU()
 
@@ -193,11 +242,26 @@ class KernelLearner(nn.Module):
 
         x = disperser.disperse_all_orders(x,kernel) #perform measurement
 
+
         return x
+    
+
+    def forward_inverse(self, x):
+
+        kernel = self.fill_kernel()
+        
+        x = disperser.undisperse_all_orders(x,kernel,wiener=True,lamb=self.relu(self.lamb))
+        
+        return x    
+    
+
+    def initialise_variable_kernel(self):
+        self.variable_kernel = nn.Parameter(self.kernel[0,self.locations] + 1e-10, requires_grad=True)
 
 
     def fill_kernel(self):
-        kernel = torch.zeros_like(self.kernel)
+        # kernel = torch.zeros_like(self.kernel)
+        kernel = self.kernel.clone()
         kernel[0,self.locations] = self.relu(self.variable_kernel)
         return kernel
 
@@ -259,7 +323,7 @@ class AffineTransformModel(nn.Module):
     '''
     A model that can apply seperate rotations and translations in certain regions. 
     '''
-    def __init__(self, region, rot=20., transX=0., transY=0., scale=True):
+    def __init__(self, region, rot=20., transX=0., transY=0., scale=True, no_channels = 41, grating = True):
         super().__init__()
 
         no_regions = len(region)
@@ -278,10 +342,10 @@ class AffineTransformModel(nn.Module):
 
         self.no_regions = no_regions
 
-        no_channels = 41
-
         self.scale=scale
-        self.grating_spectrum = nn.Parameter(torch.ones(no_regions, no_channels), requires_grad = True)
+        self.grating = grating
+        if grating:
+            self.grating_spectrum = nn.Parameter(torch.ones(no_regions, no_channels), requires_grad = True)
         self.relu = nn.ReLU()
 
 
@@ -293,7 +357,10 @@ class AffineTransformModel(nn.Module):
         for i in range(self.no_regions):
 
             grid = F.affine_grid(theta[i], x[:,:,self.pos[i,0,0]:self.pos[i,0,1],self.pos[i,1,0]:self.pos[i,1,1]].size(), align_corners=False)
-            transformed_x[:,:,self.pos[i,0,0]:self.pos[i,0,1],self.pos[i,1,0]:self.pos[i,1,1]] = F.grid_sample(x[:,:,self.pos[i,0,0]:self.pos[i,0,1],self.pos[i,1,0]:self.pos[i,1,1]], grid, align_corners=False) * self.relu(self.grating_spectrum[i]).unsqueeze(0).unsqueeze(-1).unsqueeze(-1)
+            if self.grating:
+                transformed_x[:,:,self.pos[i,0,0]:self.pos[i,0,1],self.pos[i,1,0]:self.pos[i,1,1]] = F.grid_sample(x[:,:,self.pos[i,0,0]:self.pos[i,0,1],self.pos[i,1,0]:self.pos[i,1,1]], grid, align_corners=False) * self.relu(self.grating_spectrum[i]).unsqueeze(0).unsqueeze(-1).unsqueeze(-1)
+            else:
+                transformed_x[:,:,self.pos[i,0,0]:self.pos[i,0,1],self.pos[i,1,0]:self.pos[i,1,1]] = F.grid_sample(x[:,:,self.pos[i,0,0]:self.pos[i,0,1],self.pos[i,1,0]:self.pos[i,1,1]], grid, align_corners=False) 
 
         return transformed_x
 

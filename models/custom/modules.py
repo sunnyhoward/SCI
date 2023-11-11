@@ -6,38 +6,140 @@ import cv2
 
 
 class CoordGate(nn.Module):
-    def __init__(self, encoding_layers, enc_channels, out_channels, size:list=[256,256],device='cuda'):
+    def __init__(self, enc_channels, out_channels, size:list=[256,256],enctype='pos',**kwargs):
         super(CoordGate, self).__init__()
+        '''
+        type can be:'pos' - position encoding
+                    'regularised' 
+        '''
 
-        x_coord, y_coord = torch.linspace(-1,1,int(size[0])), torch.linspace(-1,1,int(size[1]))
+        self.enctype = enctype
 
-        # self.pos = torch.stack(torch.meshgrid((x_coord,y_coord), indexing='ij'), dim=-1).view(-1,2).to(device)
-        self.register_buffer('pos', torch.stack(torch.meshgrid((x_coord,y_coord), indexing='ij'), dim=-1).view(-1,2))#.to(device)
-        
+        if enctype == 'pos':
 
-        self.encoder = nn.Sequential()
-        for i in range(encoding_layers):
-            if i == 0:
-                self.encoder.add_module('linear'+str(i),nn.Linear(2,enc_channels))
-            elif i == encoding_layers-1:
-                self.encoder.add_module('linear'+str(i),nn.Linear(enc_channels,out_channels))
-            else:
-                self.encoder.add_module('linear'+str(i),nn.Linear(enc_channels,enc_channels))
-        
-        self.conv = nn.Conv2d(out_channels,out_channels,1,padding='same')
+            encoding_layers = kwargs['encoding_layers']
+
+            x_coord, y_coord = torch.linspace(-1,1,int(size[0])), torch.linspace(-1,1,int(size[1]))
+
+            self.register_buffer('pos', torch.stack(torch.meshgrid((x_coord,y_coord), indexing='ij'), dim=-1).view(-1,2))#.to(device)
+            
+
+            self.encoder = nn.Sequential()
+            for i in range(encoding_layers):
+                if i == 0:
+                    self.encoder.add_module('linear'+str(i),nn.Linear(2,enc_channels))
+                else:
+                    self.encoder.add_module('linear'+str(i),nn.Linear(enc_channels,enc_channels))
+
+        elif enctype == 'map':
+
+            initialiser = kwargs['initialiser']
+
+            self.map = nn.Parameter(initialiser)
+  
+        self.conv = nn.Conv2d(enc_channels,out_channels,1,padding='same')
+
+        self.relu = nn.ReLU()
 
 
     def forward(self, x):
         '''
         x is (bs,nc,nx,ny)
         '''
+        if self.enctype == 'pos':
+            
+            gate = self.encoder(self.pos).view(1,x.shape[2],x.shape[3],x.shape[1]).permute(0,3,1,2)
+            gate = torch.nn.functional.relu(gate) #?
+            x = self.conv(x * gate)
+            return x
+        
 
-        encoded_pos = self.encoder(self.pos).view(1,x.shape[2],x.shape[3],x.shape[1]).permute(0,3,1,2)
+        elif self.enctype == 'map':
 
-        x = x * encoded_pos
+            shape = x.shape
+        
+            x = self.conv(x * self.relu(self.map))
+            # if self.regulariser is not None:
+            #     reg_loss = self.regulariser(self.relu(self.map))
+            #     return x, reg_loss
+            # else:
+            return x
+            
 
-        return self.conv(x)
+def total_variation(map):
+    #map is shape bs,nc,nx,ny
+    TV = torch.sum(torch.abs(map[:,:,:-1,:] - map[:,:,1:,:])) + torch.sum(torch.abs(map[:,:,:,:-1] - map[:,:,:,1:]))
+    return TV/torch.prod(torch.tensor(map.shape))
 
+
+def hessian(map,boundaries=[],norm=2):
+    #map is shape bs,nc,nx,ny, boundaries can be the separators between regions.
+
+    if len(boundaries) == 0:
+        second_deriv_xx, second_deriv_xy, second_deriv_yx, second_deriv_yy = calc_second_derivs2D(map)
+        reg_loss = torch.norm(torch.concat([second_deriv_xx,second_deriv_xy,second_deriv_yx,second_deriv_yy],dim=0),p=norm)
+
+    else:
+        second_deriv_xx, second_deriv_xy, second_deriv_yx, second_deriv_yy = calc_second_derivs2D(map)
+
+        second_deriv_xx[...,boundaries[0]-5:boundaries[0]+5] = 0
+        second_deriv_xy[...,boundaries[0]-5:boundaries[0]+5] = 0
+        second_deriv_yx[...,boundaries[0]-5:boundaries[0]+5] = 0
+        second_deriv_yy[...,boundaries[0]-5:boundaries[0]+5] = 0
+
+        second_deriv_xx[...,boundaries[1]-5:boundaries[1]+5] = 0
+        second_deriv_xy[...,boundaries[1]-5:boundaries[1]+5] = 0
+        second_deriv_yx[...,boundaries[1]-5:boundaries[1]+5] = 0
+        second_deriv_yy[...,boundaries[1]-5:boundaries[1]+5] = 0
+
+        reg_loss = torch.norm(torch.concat([second_deriv_xx,second_deriv_xy,second_deriv_yx,second_deriv_yy],dim=0),p=norm)
+    return reg_loss
+
+
+def hessian3D(map):
+    #map is shape bs,nc,nx,ny, boundaries can be the separators between regions.
+
+    second_deriv_xx, second_deriv_xy, second_deriv_yx, second_deriv_yy = calc_second_derivs2D(map)
+
+    first_deriv_l = torch.gradient(map,axis=1)[0]
+    second_deriv_ll = torch.gradient(first_deriv_l,axis=1)[0]
+
+    reg_loss = reg_loss = torch.norm(torch.concat([second_deriv_xx,second_deriv_xy,second_deriv_yx,second_deriv_yy,second_deriv_ll],dim=0),p=2)
+    return reg_loss
+
+
+def first_deriv(map,norm=2):
+    #map is shape bs,nc,nx,ny
+    first_deriv_x, first_deriv_y = torch.gradient(map,axis=(2,3))
+    reg_loss = torch.norm(torch.concat([first_deriv_x,first_deriv_y],dim=0),p=norm)
+    return reg_loss
+
+
+
+
+def calc_second_derivs2D(map):
+    first_deriv_x, first_deriv_y = torch.gradient(map,axis=(2,3))
+    second_deriv_xx, second_deriv_xy = torch.gradient(first_deriv_x,axis=(2,3))
+    second_deriv_yx, second_deriv_yy = torch.gradient(first_deriv_y,axis=(2,3))
+    return second_deriv_xx, second_deriv_xy, second_deriv_yx, second_deriv_yy
+
+
+def calc_second_derivs3D(map):
+    first_deriv_l, first_deriv_x, first_deriv_y = torch.gradient(map,axis=(1,2,3))
+    second_deriv_ll, second_deriv_lx,second_deriv_ly = torch.gradient(first_deriv_l,axis=(1,2,3))
+
+    second_deriv_ll, second_deriv_lx,second_deriv_ly = torch.norm(second_deriv_ll,2), torch.norm(second_deriv_lx,2),torch.norm(second_deriv_ly,2)
+
+    second_deriv_xl, second_deriv_xx, second_deriv_xy = torch.gradient(first_deriv_x,axis=(1,2,3))
+
+    second_deriv_xl, second_deriv_xx,second_deriv_xy = torch.norm(second_deriv_xl,2), torch.norm(second_deriv_xx,2),torch.norm(second_deriv_xy,2)
+
+    second_deriv_yl, second_deriv_yx, second_deriv_yy = torch.gradient(first_deriv_y,axis=(1,2,3))#
+
+    second_deriv_yl, second_deriv_yx,second_deriv_yy = torch.norm(second_deriv_yl,2), torch.norm(second_deriv_yx,2),torch.norm(second_deriv_yy,2)
+
+
+    return second_deriv_ll, second_deriv_lx,second_deriv_ly, second_deriv_xl, second_deriv_xx, second_deriv_xy, second_deriv_yl, second_deriv_yx, second_deriv_yy
 
 
 
@@ -50,14 +152,12 @@ def findclusters(kernel, padding = 4, threshold=0, type = 'nearest_neighbour', c
     type: nearest neighbour is for creating a mask, with padding around all the places where the kernel is nonzero. (useful for trainable kernel)
     type: boxes is for finding the coordinates of boxes around each part of the kernel. output is shape (9, 2, 2): [no_regions, (x/y), (start/end)]
     '''
-    
-    
-
 
     if type == 'nearest_neighbour':
         sc,sx,sy = kernel[0].shape
         rel_threshold = kernel.max() * threshold
         c,x,y = torch.where(kernel[0]>rel_threshold)
+
         mask = torch.zeros((sc,sx,sy),dtype=bool) #this will be used to index a kernel.
 
         for i in range(len(x)):
@@ -66,6 +166,18 @@ def findclusters(kernel, padding = 4, threshold=0, type = 'nearest_neighbour', c
             ub_x = x[i] + padding if x[i] + padding <= sx-1 else sx-1
             lb_y = y[i] - padding if y[i] - padding >= 0 else 0
             ub_y = y[i] + padding if y[i] + padding <= sy-1 else sy-1
+
+            if sx == 1:
+                lb_x = 0
+                ub_x = 1
+            
+            if padding==0:
+                lb_x = x[i]
+                ub_x = x[i]+1
+                lb_y = y[i]
+                ub_y = y[i]+1
+
+
             mask[c[i],lb_x:ub_x,lb_y:ub_y] = True
 
         return  mask
@@ -154,8 +266,9 @@ class TVLoss(nn.Module):
         loss = self.mse_weight * mse_loss + self.tv_weight * tv_loss
 
         return loss
-
-    def total_variation_loss(self, x):
+    
+    @staticmethod
+    def total_variation_loss(x):
         # Calculate the Total Variation (TV) loss
         norm = torch.prod(torch.tensor(x.shape))
         
@@ -171,14 +284,15 @@ class CenterOfMassLoss(nn.Module):
     '''
     A model that tries to match the center of mass of the predicted and target tensors in certain regions.
     '''
-    def __init__(self, region, intensity_factor=3, funda_weight = 5, channels=31):
+    def __init__(self, region, intensity_factor=3, funda_weight = 5, channels=31, funda_index = None):
         super(CenterOfMassLoss, self).__init__()
         self.region = region
         self.intensity_factor = intensity_factor
         self.funda_weight = funda_weight
         self.channels = channels
-        self.fundamental_index = int(((region[:,0,0]< 1100) & (region[:,0,1] > 1100) & (region[:,1,0] < 1100) & (region[:,1,1] > 1100)).to(torch.float32).argmax())
-
+        if funda_index == None: self.fundamental_index = int(((region[:,0,0]< 1100) & (region[:,0,1] > 1100) & (region[:,1,0] < 1100) & (region[:,1,1] > 1100)).to(torch.float32).argmax())
+        else: self.fundamental_index = funda_index
+        
     def forward(self, predicted, target):
 
         total_loss = 0

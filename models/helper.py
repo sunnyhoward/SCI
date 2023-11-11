@@ -179,13 +179,8 @@ class SyntheticDataset(Dataset):
 
         y = self.sensing_function(torch.ones_like(x),x,shift_info=self.shift_info) #measure it
 
-        # y += torch.randn_like(y) * y.max() * 0.00001 #add noise
+        y[y<0] = 0
 
-        # y[y<0] = 0 #remove negative values
-
-
-
-        
         if self.crop != False:
             nx,ny = x.shape[2:]
             cropx = self.crop[0] // 2
@@ -230,17 +225,19 @@ class FTSDataset(Dataset):
             Returns:
                     (array): undispersed, unintegrated cube
     '''
-    def __init__(self, undispersed_cube, spectra, dir, crop=False,random_shifts=False,angle=0):
+    def __init__(self, undispersed_cube, spectra, positions, dir, crop=False,random_shifts=False):
         super(FTSDataset, self).__init__()
 
         self.undispersed_cube = undispersed_cube
-        self.spectra = spectra
         self.crop = crop
         self.random_shifts = random_shifts
         self.set_batch()
         self.dir = '/project/agdoepp/Experiment/Hyperspectral_Calibration_FTS/'+dir + '/'
-        self.positions = np.load(self.dir+'/positions.npy')
-        self.angle = angle
+        self.positions = positions# np.load(self.dir+'/positions.npy')[indices]
+        self.spectra = spectra #np.load(self.dir+'/spectra.npy')[:,indices]
+        # self.angle = angle
+
+        
         
         try: self.integration_time =   int(dir.split('0us')[0].split('_')[-1] + '0'); 
         except: self.integration_time =   int(dir.split('0_us')[0].split('_')[-1] + '0'); 
@@ -256,10 +253,9 @@ class FTSDataset(Dataset):
     def __getitem__(self, index):
 
         x = self.data * self.spectra[:,index].permute(1,0).unsqueeze(-1).unsqueeze(-1)
-        y = torch.stack([torch.from_numpy( rotate(np.load(self.dir + 'piezopos_' + str(i) + '.npy').astype(np.float32), angle=self.angle )) for i in self.positions[index]],dim = 0) # - 0.0002 # removing background noise?
-        
-        # y[y<15] = 0 #threshold
-        # y = y/(2**12 ) /self.integration_time
+        # y = torch.stack([torch.from_numpy( rotate(np.load(self.dir + 'piezopos_' + str(i) + '.npy').astype(np.float32), angle=self.angle )) for i in self.positions[index]],dim = 0) # - 0.0002 # removing background noise?
+        y = torch.stack([torch.from_numpy( np.load(self.dir + 'piezopos_' + str(i) + '.npy').astype(np.float32)) for i in self.positions[index]],dim = 0) # - 0.0002 # removing background noise?
+
    
         y = y/self.integration_time
 
@@ -308,7 +304,7 @@ class HDF5Dataset(Dataset):
 ###########################################################################################
 
 
-def create_bs_data(desired_channels, fts_dir, cube=None, desired_range=[700,900], cube_dir = None, interp_type='average', device='cuda'):
+def create_bs_data(desired_channels, fts_dir, desired_range=[700,900], cube_dir = None, interp_type='average', device='cuda'):
     '''
     This is ugly so put it in a function. 
 
@@ -324,47 +320,39 @@ def create_bs_data(desired_channels, fts_dir, cube=None, desired_range=[700,900]
     print('collecting the undispersed cube and spectra.')
 
 
-    cube_dir = '/project/agdoepp/Experiment/Hyperspectral_Calibration_FTS/'+cube_dir + '/'
     datadir = '/project/agdoepp/Experiment/Hyperspectral_Calibration_FTS/'+fts_dir + '/'
     
 
-    if '0us' in cube_dir: integration_time = int(cube_dir.split('0us')[0].split('_')[-1] + '0')
-    elif '0_us' in cube_dir: integration_time = int(cube_dir.split('0_us')[0].split('_')[-1] + '0')
+    
 
     ###load the cube and FTS spectra###
-    undisp_cube = load_cube(cube_dir)
-    spectras = np.load(datadir+'spectra.npy') 
-    try: initial_bins = np.load(cube_dir+'wavls_padded_fixed_thresholded.npy')
-    except: 
-        try: 
-            initial_bins = np.load(cube_dir+'wavls_padded_fixed.npy')
-        except: initial_bins = np.load(cube_dir+'wavls_padded.npy')
+    if cube_dir!=None:
+        cube_dir = '/project/agdoepp/Experiment/Hyperspectral_Calibration_FTS/'+cube_dir + '/'
+
+
+        undisp_cube = load_cube(cube_dir)
+        undisp_cube = downsample_signal(undisp_cube, desired_channels, initial_bins, interp_axis = 2, desired_range = desired_range, interp_type=interp_type) #interpolate to 750-850nm
+        undisp_cube = torch.tensor(undisp_cube).float().permute(2,0,1).unsqueeze(0).to(device)
+        try: initial_bins = np.load(cube_dir+'wavls_padded_fixed_thresholded.npy')
+        except: 
+            try: 
+                initial_bins = np.load(cube_dir+'wavls_padded_fixed.npy')
+            except: initial_bins = np.load(cube_dir+'wavls_padded.npy')
+    else:
+        undisp_cube=None
+    
 
     ###interpolate to desired channels###
-    undisp_cube = downsample_signal(undisp_cube, desired_channels, initial_bins, interp_axis = 2, desired_range = desired_range, interp_type=interp_type) #interpolate to 750-850nm
     
+    spectras = np.load(datadir+'spectra.npy') 
     initial_bins = np.linspace(634.69, 1124.5, spectras.shape[0])*1e-9
     spectras = downsample_signal(spectras, desired_channels, initial_bins, desired_range = desired_range, interp_axis = 0, interp_type=interp_type) #interpolate to 750-850nm
 
+    
     ###normalize and send to cuda###
-    undisp_cube = torch.tensor(normalize(undisp_cube, integration_time)).float().permute(2,0,1).unsqueeze(0).to(device)
+    
     spectras = torch.tensor(spectras).float().to(device)
     spectras = (spectras - spectras.min()) / (spectras.max() - spectras.min()) #normalize the spectra individually between 0 and 1
-
-
-    # if cube is not None:
-    #     undisp_cube = cube
-
-
-    # mask = undisp_cube > (0.05 * undisp_cube.max()) #this is a hack.
-
-    # dispersed_mask = torch.abs(fwd.fourier.method.disperser.disperse_all_orders(mask.cpu(),kernel.cpu()))
-    # dispersed_mask[dispersed_mask<0.01 * dispersed_mask.max() ] = 0
-    # dispersed_mask[dispersed_mask>0] = 1
-
-    # np.save(cube_dir+'dispersed_mask.npy',dispersed_mask.numpy())
-    # dispersed_mask = torch.tensor(dispersed_mask).to(device)
-
     
     return undisp_cube, spectras#dispersed_mask
 
@@ -383,7 +371,7 @@ def normalize(data, integration_time):
 
 
 
-def downsample_signal(data, desired_channels, initial_bins, desired_range = [700,900], interp_axis = -1, interp_type='nearest'):
+def downsample_signal(data, desired_channels, initial_bins, desired_range = [700,900], interp_axis = -1, interp_type='average'):
     '''
     TO BE RENAMED to DOWNSAMPLE_SIGNAL
     simplest possible example.
@@ -396,7 +384,9 @@ def downsample_signal(data, desired_channels, initial_bins, desired_range = [700
     
     desired_bins = np.linspace(desired_range[0],desired_range[1],desired_channels)*1e-9
 
-    
+    # f = scipy.interpolate.interp1d(initial_bins, data, axis=interp_axis)
+
+    # newdata = f(desired_bins)
     
     if interp_type == 'nearest':
         idx = np.zeros_like(desired_bins,dtype=int)
@@ -420,28 +410,119 @@ def downsample_signal(data, desired_channels, initial_bins, desired_range = [700
 
 
 
-def load_cube(anadir):
 
-    try:
-        signalfft_center = np.load(anadir+'signalfft_padded_center_fixed_thresholded.npy')
-        signalfft_left = np.load(anadir+'signalfft_padded_left_fixed_thresholded.npy')
-        signalfft_right = np.load(anadir+'signalfft_padded_right_fixed_thresholded.npy')
-    except:        
+def load_cube(anadir, postfix = '', onefile=True):
+
+    anadir = '/project/agdoepp/Experiment/Hyperspectral_Calibration_FTS/'+anadir + '/'
+
+    if '0us' in anadir: integration_time = int(anadir.split('0us')[0].split('_')[-1] + '0')
+    elif '0_us' in anadir: integration_time = int(anadir.split('0_us')[0].split('_')[-1] + '0')
+
+    if onefile:
+        undisp_cube = np.load(anadir+'signalfft_'+postfix+'.npy')
+
+        wavls = np.load(anadir+'wavls_'+postfix+'.npy')
+        freqs = np.load(anadir+'freqs_'+postfix+'.npy')
+    else: #the postfix is for the center.
+
+        signalfft_center = np.load(anadir+'signalfft_'+postfix+'.npy')
+        left_string = postfix.split('center')[0] + 'left' + postfix.split('center')[1]
+        right_string = postfix.split('center')[0] + 'right' + postfix.split('center')[1]
+
+        signalfft_left = np.load(anadir+'signalfft_'+left_string+'.npy')
+        signalfft_right = np.load(anadir+'signalfft_'+right_string+'.npy')
+        undisp_cube = np.concatenate((signalfft_left,signalfft_center,signalfft_right),axis = 1) 
+
+        nostring = postfix.split('center_')[0] + postfix.split('center_')[1]
+        wavls = np.load(anadir+'wavls_'+nostring+'.npy')
+        freqs = np.load(anadir+'freqs_'+nostring+'.npy')
+
+    undisp_cube = normalize(undisp_cube, integration_time)
+    
+    return undisp_cube, wavls, freqs
+
+
+def load_spectra(fts_dir,desired_channels, desired_range, device):
+
+    datadir = '/project/agdoepp/Experiment/Hyperspectral_Calibration_FTS/'+fts_dir + '/' 
+    
+    spectras = np.load(datadir+'spectra.npy') 
+    initial_bins = np.linspace(634.69, 1124.5, spectras.shape[0])
+
+    spectras, final_bins = fix_spectra(spectras, initial_bins, desired_range)
+
+    spectras = (spectras - np.min(spectras,axis=0)) / (np.max(spectras,axis=0) - np.min(spectras,axis=0)) #normalize the spectra individually between 0 and 1
+
+    spectras = downsample_signal(spectras, desired_channels, final_bins * 1e-9, desired_range = desired_range, interp_axis = 0, interp_type='average') #interpolate to 750-850nm
+
+    
+    ###normalize and send to cuda###
+    
+    spectras = torch.tensor(spectras).float().to(device)
+    
+    return spectras
+
+
+def fix_spectra(spectras, initial_bins, desired_range, verbose=False):
+    # the spectras have the intensity of the signal overlayed. We wish to remove that.
+    spectras = spectras[((initial_bins>desired_range[0]) & (initial_bins < desired_range[1]))]
+    final_bins = initial_bins[((initial_bins>desired_range[0]) & (initial_bins < desired_range[1]))]
+
+
+    mean_spectra = np.mean(spectras,axis=1)
+    normed_spectra = spectras / mean_spectra[:,None]
+
+    fft_spectra = np.abs(np.fft.fftshift(np.fft.fft(normed_spectra, axis=0),axes=0))
+    length = fft_spectra.shape[1]
+    bla = np.fft.fftshift(np.fft.fftfreq(len(normed_spectra), d=1))
+
+    # plt.figure(dpi=250)
+    # plt.imshow(fft_spectra, extent = [0,length,bla[0],bla[-1]],aspect='auto'); plt.xlabel('shotno'); plt.ylabel('frequency')
+
+    threshold = 0.2
+    from scipy import ndimage
+
+    uber0 = fft_spectra[bla>0]
+    uber0[uber0<uber0.max()*threshold] = 0
+    ele = ndimage.center_of_mass(uber0[:,0])[0]
+    init = bla[bla>0][np.floor(ele).astype(int)] * (1-ele%1) + bla[bla>0][np.ceil(ele).astype(int)] * (ele%1)
+
+    unter0 = fft_spectra[bla<0]
+    unter0[unter0<unter0.max()*threshold] = 0
+    ele = ndimage.center_of_mass(unter0[:,0])[0]
+    final = bla[bla<0][np.floor(ele).astype(int)] * (1-ele%1) + bla[bla<0][np.ceil(ele).astype(int)] * (ele%1)
+
+    # plt.plot([0,length],[init,final], 'r', linewidth=0.1)
+
+    frequency = np.arange(length) / length * (final - init) + init
+
+    def func(x, a, b, c, d):
+        return a + b * np.sin(2*np.pi* c * x + d)
+    xpos = np.arange(len(normed_spectra))
+
+    pred_spectras = np.zeros_like(normed_spectra)
+
+    from scipy.optimize import curve_fit
+
+
+    for i in range(len(normed_spectra[0])):
+        p0 = [1., 0.5, frequency[i], 0.]
+        y = normed_spectra[:,i]
         try:
-            signalfft_center = np.load(anadir+'signalfft_padded_center.npy')
-            signalfft_left = np.load(anadir+'signalfft_padded_left.npy')
-            signalfft_right = np.load(anadir+'signalfft_padded_right.npy')
+            p1, var_matrix = curve_fit(func, xpos, y, p0)
+            # p_ult = np.array([1, p1[1], p1[2], p1[3]])
+            pred_spectras[:,i] = func(xpos, *p1)
         except:
-            signalfft_center = np.load(anadir+'signalfft_padded_center_fixed.npy')
-            signalfft_left = np.load(anadir+'signalfft_padded_left_fixed.npy')
-            signalfft_right = np.load(anadir+'signalfft_padded_right_fixed.npy')
+            pred_spectras[:,i] = pred_spectras[:,i-1]
 
-    undisp_cube = np.concatenate((signalfft_left,signalfft_center,signalfft_right),axis = 1) 
-    return undisp_cube
+    pred_spectras = (pred_spectras - np.min(pred_spectras,axis=0)) / (np.max(pred_spectras,axis=0) - np.min(pred_spectras,axis=0)) #normalize the spectra individually between 0 and 1
 
 
+    return pred_spectras, final_bins
+        
 
-def center_cubes(nograting_cube, grating_cube, device='cpu'):
+
+def center_cubes(nograting_cube, grating_cube,  device='cpu'):
     '''
     given a cube without grating and one with grating, match the locations of the fundamental.
     '''
@@ -460,7 +541,9 @@ def center_cubes(nograting_cube, grating_cube, device='cpu'):
     grating_cube = torch.roll(grating_cube, shifts=(-rollx[0],-rollx[1]), dims=(2, 3)) # shift them both to the center of grating_cube
     nograting_cube = torch.roll(nograting_cube, shifts=(-rollx[0],-rollx[1]), dims=(2, 3))
 
-    nograting_cube = shift_nograting_to_grating(nograting_cube, grating_cube, y_range=[0,500], device=device)
+    # if shift_ng_to_g:
+
+        # nograting_cube = shift_nograting_to_grating(nograting_cube, grating_cube, y_range=[0,500], device=device)
 
 
     return nograting_cube, grating_cube
@@ -511,7 +594,7 @@ def sub_nogratingfunda(nograting_cube,grating_cube):
 def shift_nograting_to_grating(nograting_cube, grating_cube, y_range, device='cpu'):
 
 
-    region = np.array([[y_range[0],y_range[1]],[1000,1340]])
+    region = np.array([[y_range[0],y_range[1]],[700,1600]])
     CoM_nog = CenterOfMassLoss.calculate_center_of_mass(nograting_cube[0],region).mean(0)
     CoM_g = CenterOfMassLoss.calculate_center_of_mass(grating_cube[0],region).mean(0)
 
@@ -525,6 +608,8 @@ def shift_nograting_to_grating(nograting_cube, grating_cube, y_range, device='cp
     result = torch.tensor(scipy.ndimage.shift(nograting_cube.cpu(), shift = (0,0,shifts[0],shifts[1]), order = 1)).to(device)
 
     return result# (torch.roll(nograting_cube,tuple(shiftdown.numpy()),dims=(2,3)) + torch.roll(nograting_cube,tuple(shiftup.numpy()),dims=(2,3))) / 2
+
+
 
 def remove_rotation(kernel, y_range = [0,100], wl_range=[0,41], verbose=False):
     

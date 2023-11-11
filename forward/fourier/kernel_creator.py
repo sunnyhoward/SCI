@@ -19,6 +19,15 @@ def create_fourier_kernel(desired_channels=21, desired_range=[700,900], one_grat
     gratings_intensity_modulations = np.load(path_share+'gratings_intensity_modulations_nm_resolution.npy')
     wavelengths = np.load(path_share+'gratings_wavelengths_nm_resolution.npy') #between 700 and 900 nm
 
+    if type(desired_channels) == int:
+        
+        #downsample the grating intensity modulations onto equispaced wavelength grid
+        gratings_intensity_modulations = downsample_signal(gratings_intensity_modulations, desired_channels=desired_channels, initial_bins=wavelengths*1e-9, 
+                        desired_range=desired_range, interp_axis=-1, interp_type='average')
+
+        wavelengths = np.linspace(desired_range[0],desired_range[1],desired_channels)
+
+
     #    #vertical dispersion in pixel per nm
     shift_vertical_per_nm =  1.1324938301431489
     #vertical dispersion in pixel at 800 nm
@@ -43,18 +52,19 @@ def create_fourier_kernel(desired_channels=21, desired_range=[700,900], one_grat
     size_x = 2048
     size_y = 2448
 
+    wavelengths = np.linspace(700,900,400)
 
     # gratings_intensity_modulations = gratings_intensity_modulations + gratings_intensity_modulations.max() * 0.000001
 
-    intensity_zero_order = gratings_intensity_modulations[4]
-    intensity_polgrat_bottom = gratings_intensity_modulations[7]
-    intensity_polgrat_top = gratings_intensity_modulations[1]
-    intensity_grat_left = gratings_intensity_modulations[3]
-    intensity_grat_right = gratings_intensity_modulations[5]
-    intensity_top_left = gratings_intensity_modulations[0]
-    intensity_top_right = gratings_intensity_modulations[2]
-    intensity_bottom_left = gratings_intensity_modulations[6]
-    intensity_bottom_right = gratings_intensity_modulations[8]
+    # intensity_zero_order = gratings_intensity_modulations[4]
+    # intensity_polgrat_bottom = gratings_intensity_modulations[7]
+    # intensity_polgrat_top = gratings_intensity_modulations[1]
+    # intensity_grat_left = gratings_intensity_modulations[3]
+    # intensity_grat_right = gratings_intensity_modulations[5]
+    # intensity_top_left = gratings_intensity_modulations[0]
+    # intensity_top_right = gratings_intensity_modulations[2]
+    # intensity_bottom_left = gratings_intensity_modulations[6]
+    # intensity_bottom_right = gratings_intensity_modulations[8]
 
 
 
@@ -74,16 +84,16 @@ def create_fourier_kernel(desired_channels=21, desired_range=[700,900], one_grat
 
         ninecopyconvolution[center_x, center_y, i] += 1#intensity_zero_order[i]
         
-        ninecopyconvolution[center_x - int(np.floor(shift_instance_x)), center_y + int(np.floor(shift_instance_y_minor)), i] += (1-(shift_instance_x%1)) * (1-(shift_instance_y_minor%1)) * intensity_polgrat_bottom[i]
-        ninecopyconvolution[center_x - int(np.ceil(shift_instance_x)), center_y + int(np.floor(shift_instance_y_minor)), i] += (shift_instance_x%1) * (1-(shift_instance_y_minor%1)) * intensity_polgrat_bottom[i]
-        ninecopyconvolution[center_x - int(np.floor(shift_instance_x)), center_y + int(np.ceil(shift_instance_y_minor)), i] += (1-(shift_instance_x%1)) * (shift_instance_y_minor%1) * intensity_polgrat_bottom[i]
-        ninecopyconvolution[center_x - int(np.ceil(shift_instance_x)), center_y + int(np.ceil(shift_instance_y_minor)), i] += (shift_instance_x%1) * (shift_instance_y_minor%1) * intensity_polgrat_bottom[i]
+        # ninecopyconvolution[center_x - int(np.floor(shift_instance_x)), center_y + int(np.floor(shift_instance_y_minor)), i] += (1-(shift_instance_x%1)) * (1-(shift_instance_y_minor%1)) * intensity_polgrat_bottom[i]
+        # ninecopyconvolution[center_x - int(np.ceil(shift_instance_x)), center_y + int(np.floor(shift_instance_y_minor)), i] += (shift_instance_x%1) * (1-(shift_instance_y_minor%1)) * intensity_polgrat_bottom[i]
+        # ninecopyconvolution[center_x - int(np.floor(shift_instance_x)), center_y + int(np.ceil(shift_instance_y_minor)), i] += (1-(shift_instance_x%1)) * (shift_instance_y_minor%1) * intensity_polgrat_bottom[i]
+        # ninecopyconvolution[center_x - int(np.ceil(shift_instance_x)), center_y + int(np.ceil(shift_instance_y_minor)), i] += (shift_instance_x%1) * (shift_instance_y_minor%1) * intensity_polgrat_bottom[i]
 
 
-        ninecopyconvolution[center_x + int(np.floor(shift_instance_x)), center_y - int(np.floor(shift_instance_y_minor)), i] += (1-(shift_instance_x%1)) * (1-(shift_instance_y_minor%1)) * intensity_polgrat_top[i]
-        ninecopyconvolution[center_x + int(np.ceil(shift_instance_x)), center_y - int(np.floor(shift_instance_y_minor)), i] += (shift_instance_x%1) * (1-(shift_instance_y_minor%1)) * intensity_polgrat_top[i]
-        ninecopyconvolution[center_x + int(np.floor(shift_instance_x)), center_y - int(np.ceil(shift_instance_y_minor)), i] += (1-(shift_instance_x%1)) * (shift_instance_y_minor%1) * intensity_polgrat_top[i]
-        ninecopyconvolution[center_x + int(np.ceil(shift_instance_x)), center_y - int(np.ceil(shift_instance_y_minor)), i] += (shift_instance_x%1) * (shift_instance_y_minor%1) * intensity_polgrat_top[i]
+        # ninecopyconvolution[center_x + int(np.floor(shift_instance_x)), center_y - int(np.floor(shift_instance_y_minor)), i] += (1-(shift_instance_x%1)) * (1-(shift_instance_y_minor%1)) * intensity_polgrat_top[i]
+        # ninecopyconvolution[center_x + int(np.ceil(shift_instance_x)), center_y - int(np.floor(shift_instance_y_minor)), i] += (shift_instance_x%1) * (1-(shift_instance_y_minor%1)) * intensity_polgrat_top[i]
+        # ninecopyconvolution[center_x + int(np.floor(shift_instance_x)), center_y - int(np.ceil(shift_instance_y_minor)), i] += (1-(shift_instance_x%1)) * (shift_instance_y_minor%1) * intensity_polgrat_top[i]
+        # ninecopyconvolution[center_x + int(np.ceil(shift_instance_x)), center_y - int(np.ceil(shift_instance_y_minor)), i] += (shift_instance_x%1) * (shift_instance_y_minor%1) * intensity_polgrat_top[i]
 
         ninecopyconvolution[center_x + int(np.floor(shift_instance_x_minor)), center_y - int(np.floor(shift_instance_y)), i] += (1-(shift_instance_x_minor%1)) * (1-(shift_instance_y%1)) #* intensity_grat_left[i]
         ninecopyconvolution[center_x + int(np.ceil(shift_instance_x_minor)), center_y - int(np.floor(shift_instance_y)), i] += (shift_instance_x_minor%1) * (1-(shift_instance_y%1)) #* intensity_grat_left[i]
@@ -95,35 +105,30 @@ def create_fourier_kernel(desired_channels=21, desired_range=[700,900], one_grat
         ninecopyconvolution[center_x - int(np.floor(shift_instance_x_minor)), center_y + int(np.ceil(shift_instance_y)), i] += (1-(shift_instance_x_minor%1)) * (shift_instance_y%1) #* intensity_grat_right[i]
         ninecopyconvolution[center_x - int(np.ceil(shift_instance_x_minor)), center_y + int(np.ceil(shift_instance_y)), i] += (shift_instance_x_minor%1) * (shift_instance_y%1) #* intensity_grat_right[i]
 
-        ninecopyconvolution[center_x - int(np.floor(shift_instance_x-shift_instance_x_minor)), center_y - int(np.floor(shift_instance_y-shift_instance_y_minor)), i] += (1-((shift_instance_x-shift_instance_x_minor)%1)) * (1-((shift_instance_y-shift_instance_y_minor)%1)) * intensity_bottom_left[i]
-        ninecopyconvolution[center_x - int(np.ceil(shift_instance_x-shift_instance_x_minor)), center_y - int(np.floor(shift_instance_y-shift_instance_y_minor)), i] += ((shift_instance_x-shift_instance_x_minor)%1) * (1-((shift_instance_y-shift_instance_y_minor)%1)) * intensity_bottom_left[i]
-        ninecopyconvolution[center_x - int(np.floor(shift_instance_x-shift_instance_x_minor)), center_y - int(np.ceil(shift_instance_y-shift_instance_y_minor)), i] += (1-((shift_instance_x-shift_instance_x_minor)%1)) * ((shift_instance_y-shift_instance_y_minor)%1) * intensity_bottom_left[i]
-        ninecopyconvolution[center_x - int(np.ceil(shift_instance_x-shift_instance_x_minor)), center_y - int(np.ceil(shift_instance_y-shift_instance_y_minor)), i] += ((shift_instance_x-shift_instance_x_minor)%1) * ((shift_instance_y-shift_instance_y_minor)%1) * intensity_bottom_left[i]
+        # ninecopyconvolution[center_x - int(np.floor(shift_instance_x-shift_instance_x_minor)), center_y - int(np.floor(shift_instance_y-shift_instance_y_minor)), i] += (1-((shift_instance_x-shift_instance_x_minor)%1)) * (1-((shift_instance_y-shift_instance_y_minor)%1)) * intensity_bottom_left[i]
+        # ninecopyconvolution[center_x - int(np.ceil(shift_instance_x-shift_instance_x_minor)), center_y - int(np.floor(shift_instance_y-shift_instance_y_minor)), i] += ((shift_instance_x-shift_instance_x_minor)%1) * (1-((shift_instance_y-shift_instance_y_minor)%1)) * intensity_bottom_left[i]
+        # ninecopyconvolution[center_x - int(np.floor(shift_instance_x-shift_instance_x_minor)), center_y - int(np.ceil(shift_instance_y-shift_instance_y_minor)), i] += (1-((shift_instance_x-shift_instance_x_minor)%1)) * ((shift_instance_y-shift_instance_y_minor)%1) * intensity_bottom_left[i]
+        # ninecopyconvolution[center_x - int(np.ceil(shift_instance_x-shift_instance_x_minor)), center_y - int(np.ceil(shift_instance_y-shift_instance_y_minor)), i] += ((shift_instance_x-shift_instance_x_minor)%1) * ((shift_instance_y-shift_instance_y_minor)%1) * intensity_bottom_left[i]
 
-        ninecopyconvolution[center_x - int(np.floor(shift_instance_x+shift_instance_x_minor)), center_y + int(np.floor(shift_instance_y+shift_instance_y_minor)), i] += (1-((shift_instance_x+shift_instance_x_minor)%1)) * (1-((shift_instance_y+shift_instance_y_minor)%1)) * intensity_top_left[i]
-        ninecopyconvolution[center_x - int(np.ceil(shift_instance_x+shift_instance_x_minor)), center_y + int(np.floor(shift_instance_y+shift_instance_y_minor)), i] += ((shift_instance_x+shift_instance_x_minor)%1) * (1-((shift_instance_y+shift_instance_y_minor)%1)) * intensity_top_left[i]
-        ninecopyconvolution[center_x - int(np.floor(shift_instance_x+shift_instance_x_minor)), center_y + int(np.ceil(shift_instance_y+shift_instance_y_minor)), i] += (1-((shift_instance_x+shift_instance_x_minor)%1)) * ((shift_instance_y+shift_instance_y_minor)%1) * intensity_top_left[i]
-        ninecopyconvolution[center_x - int(np.ceil(shift_instance_x+shift_instance_x_minor)), center_y + int(np.ceil(shift_instance_y+shift_instance_y_minor)), i] += ((shift_instance_x+shift_instance_x_minor)%1) * ((shift_instance_y+shift_instance_y_minor)%1) * intensity_top_left[i]
+        # ninecopyconvolution[center_x - int(np.floor(shift_instance_x+shift_instance_x_minor)), center_y + int(np.floor(shift_instance_y+shift_instance_y_minor)), i] += (1-((shift_instance_x+shift_instance_x_minor)%1)) * (1-((shift_instance_y+shift_instance_y_minor)%1)) * intensity_top_left[i]
+        # ninecopyconvolution[center_x - int(np.ceil(shift_instance_x+shift_instance_x_minor)), center_y + int(np.floor(shift_instance_y+shift_instance_y_minor)), i] += ((shift_instance_x+shift_instance_x_minor)%1) * (1-((shift_instance_y+shift_instance_y_minor)%1)) * intensity_top_left[i]
+        # ninecopyconvolution[center_x - int(np.floor(shift_instance_x+shift_instance_x_minor)), center_y + int(np.ceil(shift_instance_y+shift_instance_y_minor)), i] += (1-((shift_instance_x+shift_instance_x_minor)%1)) * ((shift_instance_y+shift_instance_y_minor)%1) * intensity_top_left[i]
+        # ninecopyconvolution[center_x - int(np.ceil(shift_instance_x+shift_instance_x_minor)), center_y + int(np.ceil(shift_instance_y+shift_instance_y_minor)), i] += ((shift_instance_x+shift_instance_x_minor)%1) * ((shift_instance_y+shift_instance_y_minor)%1) * intensity_top_left[i]
 
-        ninecopyconvolution[center_x + int(np.floor(shift_instance_x+shift_instance_x_minor)), center_y - int(np.floor(shift_instance_y+shift_instance_y_minor)), i] += (1-((shift_instance_x+shift_instance_x_minor)%1)) * (1-((shift_instance_y+shift_instance_y_minor)%1)) * intensity_bottom_right[i]
-        ninecopyconvolution[center_x + int(np.ceil(shift_instance_x+shift_instance_x_minor)), center_y - int(np.floor(shift_instance_y+shift_instance_y_minor)), i] += ((shift_instance_x+shift_instance_x_minor)%1) * (1-((shift_instance_y+shift_instance_y_minor)%1)) * intensity_bottom_right[i]
-        ninecopyconvolution[center_x + int(np.floor(shift_instance_x+shift_instance_x_minor)), center_y - int(np.ceil(shift_instance_y+shift_instance_y_minor)), i] += (1-((shift_instance_x+shift_instance_x_minor)%1)) * ((shift_instance_y+shift_instance_y_minor)%1) * intensity_bottom_right[i]
-        ninecopyconvolution[center_x + int(np.ceil(shift_instance_x+shift_instance_x_minor)), center_y - int(np.ceil(shift_instance_y+shift_instance_y_minor)), i] += ((shift_instance_x+shift_instance_x_minor)%1) * ((shift_instance_y+shift_instance_y_minor)%1) * intensity_bottom_right[i]
+        # ninecopyconvolution[center_x + int(np.floor(shift_instance_x+shift_instance_x_minor)), center_y - int(np.floor(shift_instance_y+shift_instance_y_minor)), i] += (1-((shift_instance_x+shift_instance_x_minor)%1)) * (1-((shift_instance_y+shift_instance_y_minor)%1)) * intensity_bottom_right[i]
+        # ninecopyconvolution[center_x + int(np.ceil(shift_instance_x+shift_instance_x_minor)), center_y - int(np.floor(shift_instance_y+shift_instance_y_minor)), i] += ((shift_instance_x+shift_instance_x_minor)%1) * (1-((shift_instance_y+shift_instance_y_minor)%1)) * intensity_bottom_right[i]
+        # ninecopyconvolution[center_x + int(np.floor(shift_instance_x+shift_instance_x_minor)), center_y - int(np.ceil(shift_instance_y+shift_instance_y_minor)), i] += (1-((shift_instance_x+shift_instance_x_minor)%1)) * ((shift_instance_y+shift_instance_y_minor)%1) * intensity_bottom_right[i]
+        # ninecopyconvolution[center_x + int(np.ceil(shift_instance_x+shift_instance_x_minor)), center_y - int(np.ceil(shift_instance_y+shift_instance_y_minor)), i] += ((shift_instance_x+shift_instance_x_minor)%1) * ((shift_instance_y+shift_instance_y_minor)%1) * intensity_bottom_right[i]
 
-        ninecopyconvolution[center_x + int(np.floor(shift_instance_x-shift_instance_x_minor)), center_y + int(np.floor(shift_instance_y-shift_instance_y_minor)), i] += (1-((shift_instance_x-shift_instance_x_minor)%1)) * (1-((shift_instance_y-shift_instance_y_minor)%1)) * intensity_top_right[i]
-        ninecopyconvolution[center_x + int(np.ceil(shift_instance_x-shift_instance_x_minor)), center_y + int(np.floor(shift_instance_y-shift_instance_y_minor)), i] += ((shift_instance_x-shift_instance_x_minor)%1) * (1-((shift_instance_y-shift_instance_y_minor)%1)) * intensity_top_right[i]
-        ninecopyconvolution[center_x + int(np.floor(shift_instance_x-shift_instance_x_minor)), center_y + int(np.ceil(shift_instance_y-shift_instance_y_minor)), i] += (1-((shift_instance_x-shift_instance_x_minor)%1)) * ((shift_instance_y-shift_instance_y_minor)%1) * intensity_top_right[i]
-        ninecopyconvolution[center_x + int(np.ceil(shift_instance_x-shift_instance_x_minor)), center_y + int(np.ceil(shift_instance_y-shift_instance_y_minor)), i] += ((shift_instance_x-shift_instance_x_minor)%1) * ((shift_instance_y-shift_instance_y_minor)%1) * intensity_top_right[i]
-
-
-    if type(desired_channels) == int:
-        ninecopyconvolution = torch.tensor(downsample_signal(ninecopyconvolution.numpy(), desired_channels=desired_channels, initial_bins=wavelengths*1e-9, desired_range=desired_range, interp_axis=-1, interp_type='average')).float()
-    else:
-        initial_bins=wavelengths
-        ninecopyconvolution = ninecopyconvolution[...,((initial_bins>desired_range[0]) & (initial_bins<desired_range[1]))]
+        # ninecopyconvolution[center_x + int(np.floor(shift_instance_x-shift_instance_x_minor)), center_y + int(np.floor(shift_instance_y-shift_instance_y_minor)), i] += (1-((shift_instance_x-shift_instance_x_minor)%1)) * (1-((shift_instance_y-shift_instance_y_minor)%1)) * intensity_top_right[i]
+        # ninecopyconvolution[center_x + int(np.ceil(shift_instance_x-shift_instance_x_minor)), center_y + int(np.floor(shift_instance_y-shift_instance_y_minor)), i] += ((shift_instance_x-shift_instance_x_minor)%1) * (1-((shift_instance_y-shift_instance_y_minor)%1)) * intensity_top_right[i]
+        # ninecopyconvolution[center_x + int(np.floor(shift_instance_x-shift_instance_x_minor)), center_y + int(np.ceil(shift_instance_y-shift_instance_y_minor)), i] += (1-((shift_instance_x-shift_instance_x_minor)%1)) * ((shift_instance_y-shift_instance_y_minor)%1) * intensity_top_right[i]
+        # ninecopyconvolution[center_x + int(np.ceil(shift_instance_x-shift_instance_x_minor)), center_y + int(np.ceil(shift_instance_y-shift_instance_y_minor)), i] += ((shift_instance_x-shift_instance_x_minor)%1) * ((shift_instance_y-shift_instance_y_minor)%1) * intensity_top_right[i]
 
 
-    # ninecopyconvolution = ninecopyconvolution / torch.sum(ninecopyconvolution,dim=(0,1))
+
+    ninecopyconvolution = torch.tensor(downsample_signal(ninecopyconvolution.numpy(), desired_channels=desired_channels, initial_bins=wavelengths*1e-9, 
+                        desired_range=desired_range, interp_axis=-1, interp_type='average').astype(np.float32))
 
     if one_grating!=False: #in this case one_grating describes the size
         
