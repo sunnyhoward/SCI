@@ -33,23 +33,38 @@ if torch.cuda.is_available():
 else:
     print("No GPUs available.")
 
-gpuno = 1
+gpuno = 3
 device = f'cuda:{gpuno}'
-
+desired_range = [735,865]
+desired_channels = 50
 
 
 kernel = torch.load('final_kernel.pt',map_location=device).requires_grad_(False)
 
 undisp_cube = torch.tensor(np.load('/project/agdoepp/Experiment/Hyperspectral_Calibration_FTS/20230906_1grating_mask_analysis_exptime_6250_us/gtcube.npy')).to(device)
-undisp_cube, spectras = hlp.create_bs_data(desired_channels=41,desired_range=[725,875], cube = undisp_cube, fts_dir = '20230906_1grating_mask_data_exptime_6250_us', cube_dir = '20230906_1grating_mask_analysis_exptime_6250_us',interp_type='average',device=device) #here we'll work with synthetic data. 
+mask = torch.tensor(np.load('/project/agdoepp/Experiment/Hyperspectral_Calibration_FTS/20230906_1grating_mask_analysis_exptime_6250_us/mask.npy')).to(device)[:1]
 
 
-batch_size = 2
+nc = undisp_cube.shape[1]
+
+datadir = '/project/agdoepp/Experiment/Hyperspectral_Calibration_FTS/20230906_1grating_mask_data_exptime_6250_us/' 
+    
+orig_spectras = np.load(datadir+'spectra.npy') 
+initial_bins = np.linspace(634.69, 1124.5, orig_spectras.shape[0])
+
+spectras, final_bins = hlp.fix_spectra(orig_spectras, initial_bins, desired_range = desired_range)
+spectras[(final_bins<745) | (final_bins>855)] = 0
+
+spectras = hlp.downsample_signal(spectras, desired_channels, final_bins * 1e-9, desired_range = desired_range, interp_axis = 0, interp_type='average') #interpolate to 750-850nm
+spectras = torch.tensor(spectras).float().to(device)
+cutoff = [450,950]
+spectras = spectras[:,cutoff[0]:cutoff[1]]
+
+
+batch_size = 4
 torch.cuda.empty_cache()
 
 cropsize = [500, 640]
-
-spectras = spectras[:,550:950]
 
 dataset = hlp.SyntheticDataset(undispersed_cube=undisp_cube,shift_info={'kernel':kernel}, spectra = spectras, crop=cropsize, random_shifts=False)
 
@@ -65,12 +80,12 @@ v_indexes = allindexes[v_split:]
 tr_loader = hlp.CustomDataLoader(dataset, tr_indexes, batch_size=batch_size, shuffle=True)
 v_loader = hlp.CustomDataLoader(dataset, v_indexes, batch_size=batch_size, shuffle=True)
 
-model = FourierDenoiser(kernel=kernel,CoordGate=False, channels=41, cropsize=cropsize).to(device)
+model = FourierDenoiser(kernel=kernel, mask=mask, CoordGate=False, channels=nc, cropsize=cropsize).to(device)
 # model = DataParallel(model,device_ids=[0,1]).to(device)
 
 
-lr = 5e-4
-epochs = 25
+lr = 1e-4
+epochs = 100
 
 
 optimizer = torch.optim.Adam(model.parameters(), lr=lr)

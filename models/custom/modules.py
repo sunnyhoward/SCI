@@ -14,6 +14,7 @@ class CoordGate(nn.Module):
         '''
 
         self.enctype = enctype
+        self.enc_channels = enc_channels
 
         if enctype == 'pos':
 
@@ -31,9 +32,14 @@ class CoordGate(nn.Module):
                 else:
                     self.encoder.add_module('linear'+str(i),nn.Linear(enc_channels,enc_channels))
 
-        elif enctype == 'map':
+        elif (enctype == 'map') or (enctype == 'bilinear'):
 
             initialiser = kwargs['initialiser']
+
+            if 'downsample' in kwargs.keys():
+                self.sample = kwargs['downsample']
+            else:
+                self.sample = [1,1]
 
             self.map = nn.Parameter(initialiser)
   
@@ -54,16 +60,199 @@ class CoordGate(nn.Module):
             return x
         
 
-        elif self.enctype == 'map':
+        elif self.enctype == 'map':       
 
-            shape = x.shape
-        
-            x = self.conv(x * self.relu(self.map))
-            # if self.regulariser is not None:
-            #     reg_loss = self.regulariser(self.relu(self.map))
-            #     return x, reg_loss
-            # else:
+            map = self.relu(self.map).repeat_interleave(self.sample[0],dim=2).repeat_interleave(self.sample[1],dim=3)
+
+            x = self.conv(x * map)
             return x
+        
+        elif self.enctype == 'bilinear':
+
+            # if self.enc_channels == 9:
+            map = create_bilinear_coeff_map_cart_3x3(self.map[:,0:1],self.map[:,1:2])
+            # else:
+            #     map = create_bilinear_coeff_map_cart_5x5(angles,distances)
+
+            map = self.relu(map).repeat_interleave(self.sample[0],dim=2).repeat_interleave(self.sample[1],dim=3)
+
+            x = self.conv(x * map)
+            return x
+
+
+def create_bilinear_coeff_map_cart_3x3(x_disp, y_disp):
+    
+    shape = x_disp.shape
+    x_disp = x_disp.reshape(-1)
+    y_disp = y_disp.reshape(-1)
+
+
+     # Determine the quadrant based on the signs of the displacements
+    primary_indices = torch.zeros_like(x_disp, dtype=torch.long)
+    primary_indices[(x_disp >= 0) & (y_disp >= 0)] = 0  # Quadrant 1
+    primary_indices[(x_disp < 0) & (y_disp >= 0)] = 2   # Quadrant 2
+    primary_indices[(x_disp < 0) & (y_disp < 0)] = 4    # Quadrant 3
+    primary_indices[(x_disp >= 0) & (y_disp < 0)] = 6   # Quadrant 4
+    # Define the number of directions
+    num_directions = 8
+
+
+    # Compute the indices for the primary and secondary directions
+    secondary_indices = ((primary_indices + 1) % num_directions).long()
+    tertiary_indices = (primary_indices - 1).long()
+    tertiary_indices[tertiary_indices < 0] = num_directions - 1
+
+
+
+    x_disp = x_disp.abs()
+    y_disp = y_disp.abs()   
+
+    coeffs = torch.zeros((x_disp.size(0), num_directions+1), device=x_disp.device)
+    batch_indices = torch.arange(x_disp.size(0), device=x_disp.device)
+
+    coeffs[batch_indices, primary_indices] = (x_disp * y_disp)  
+    coeffs[batch_indices, secondary_indices] = x_disp * (1 - y_disp)  
+    coeffs[batch_indices, tertiary_indices] = (1 - x_disp) * y_disp
+    coeffs[batch_indices, -1] = (1 - x_disp) * (1 - y_disp)
+
+    swappers = (primary_indices == 0) | (primary_indices == 4)
+
+    coeffs[batch_indices[swappers], secondary_indices[swappers]] = (1 - x_disp[swappers]) * y_disp [swappers] 
+    coeffs[batch_indices[swappers], tertiary_indices[swappers]] = x_disp[swappers] * (1 - y_disp[swappers])
+
+
+
+    coeffs = coeffs.view(shape[0] , shape[2], shape[3], num_directions+1).permute(0,3,1,2)
+    reorderer = [0,1,2,7,8,3,6,5,4]
+
+    return coeffs[:,reorderer,:,:]     
+
+
+
+
+
+# def create_bilinear_coeff_map(angles, distances):
+       
+#     shape = angles.shape
+#     angles = angles.view(-1)
+#     distances = distances.view(-1)
+
+#     # Define the number of directions
+#     num_directions = 8
+
+#     angles = angles % (2 * torch.pi)
+    
+
+#     quadrants = angles // (np.pi / 2)  * 2 
+
+
+#     # Compute the indices for the primary and secondary directions
+#     primary_indices = (quadrants).long()
+#     secondary_indices = ((primary_indices + 1) % num_directions).long()
+#     tertiary_indices = (primary_indices - 1).long()
+#     tertiary_indices[tertiary_indices < 0] = num_directions - 1
+
+
+#     # Calculate the fraction of the angle within its segment
+#     angle_in_quadrant = (angles % (np.pi/2))
+
+#     x_disp = distances * torch.cos(angle_in_quadrant)
+#     y_disp = distances * torch.sin(angle_in_quadrant)
+
+#     coeffs = torch.zeros((angles.size(0), num_directions+1), device=angles.device)
+#     batch_indices = torch.arange(angles.size(0), device=angles.device)
+
+#     coeffs[batch_indices, primary_indices] = (x_disp * y_disp)  
+#     coeffs[batch_indices, secondary_indices] = (1 - x_disp) * y_disp
+#     coeffs[batch_indices, tertiary_indices] = x_disp * (1 - y_disp)
+#     coeffs[batch_indices, -1] = (1 - x_disp) * (1 - y_disp)
+
+
+#     coeffs = coeffs.view(shape[0] , shape[2], shape[3], num_directions+1).permute(0,3,1,2)
+#     reorderer = [0,1,2,7,8,3,6,5,4]
+
+#     return coeffs[:,reorderer,:,:]
+
+
+
+
+# def angle_to_direction_vector(angles):
+    
+#     shape = angles.shape
+#     angles = angles.view(-1)
+
+#     # Define the number of directions
+#     num_directions = 8
+
+#     # Normalize angles to be in the range [0, 2π)
+#     angles = angles % (2 * torch.pi)
+
+#     # Each direction covers a segment of the circle; compute the segment size
+#     segment_size = 2 * torch.pi / num_directions
+
+#     # Compute the indices for the primary and secondary directions
+#     primary_indices = (angles // segment_size).long()
+#     secondary_indices = (primary_indices + 1) % num_directions
+
+#     # Calculate the fraction of the angle within its segment
+#     fractions = (angles - primary_indices * segment_size) / segment_size
+
+#     # Initialize the direction vectors
+#     direction_vectors = torch.zeros((angles.size(0), num_directions), device=angles.device)
+
+#     # Distribute the influence between the primary and secondary directions
+#     primary_influence = 1 - fractions
+#     secondary_influence = fractions
+
+#     # Use advanced indexing to vectorize the influence assignment
+#     batch_indices = torch.arange(angles.size(0), device=angles.device)
+#     direction_vectors[batch_indices, primary_indices] = primary_influence
+#     direction_vectors[batch_indices, secondary_indices] = secondary_influence
+
+#     direction_vectors = direction_vectors.view(shape[0] , shape[2], shape[3], num_directions).permute(0,3,1,2)
+
+#     return direction_vectors
+
+# # def angle_to_direction_vector(angles, temperature=0.1):
+    
+# #     shape = angles.shape
+# #     angles = angles.view(-1)
+
+# #     # Define the number of directions
+# #     num_directions = 8
+
+# #     # Normalize angles to be in the range [0, 2π)
+# #     angles = angles % (2 * torch.pi)
+
+# #     # Each direction covers a segment of the circle; compute the segment center angles
+# #     segment_centers = torch.linspace(0, 2 * torch.pi, num_directions + 1)[:-1] + torch.pi / num_directions
+# #     segment_centers = segment_centers.to(angles.device)
+
+# #     # Calculate differences between each angle and segment center angles
+# #     angle_diffs = torch.abs(angles.unsqueeze(1) - segment_centers)
+
+# #     # Since the circle wraps around, we take the minimum of the direct and wrap-around differences
+# #     angle_diffs = torch.min(angle_diffs, 2 * torch.pi - angle_diffs)
+
+# #     # Use softmax to create a soft assignment based on angle differences
+# #     direction_vectors = F.softmax(-angle_diffs / temperature, dim=1)
+
+# #     direction_vectors = direction_vectors.view(shape[0] , shape[2], shape[3], num_directions).permute(0,3,1,2)
+
+
+# #     return direction_vectors
+
+
+# def create_final_map(angles,distances):
+#     direction_map = angle_to_direction_vector(angles)#,temperature=0.01)
+
+#     center_vector = 1 - distances
+
+#     final_map = torch.concat((direction_map * distances, center_vector), dim=1)
+
+#     reorderer = [0,1,2,7,8,3,6,5,4]
+
+#     return final_map[:,reorderer,:,:]
             
 
 def total_variation(map):
@@ -443,3 +632,27 @@ def find_angle(image):
 
 #     return supertheta
     
+
+# def initialise_LCN_map(size,angle_degrees):
+    #     '''
+#     For a given direction, make a linear map in that direction.
+#     '''
+
+#     angle_radians = np.deg2rad(angle_degrees)
+    
+#     # Calculate the x and y components of the gradient
+#     x_gradient = np.cos(angle_radians)
+#     y_gradient = np.sin(angle_radians)
+    
+#     # Create a meshgrid for the x and y coordinates
+#     x_indices = torch.linspace(0, x_gradient, size[0])
+#     y_indices = torch.linspace(0, y_gradient, size[1])
+#     x_grid, y_grid = torch.meshgrid(x_indices, y_indices)
+    
+#     # Calculate the gradient array
+#     gradient_array = x_grid + y_grid
+
+#     gradient_array = (2 * (gradient_array - gradient_array.min()) /(gradient_array.max() - gradient_array.min())  -1 )   * (1/9) 
+#     print(gradient_array.mean())
+    
+#     return gradient_array

@@ -167,6 +167,7 @@ class CG_UNet(nn.Module):
     
 
 
+
 class CG_convolution_layer(nn.Module):
     '''
     Single convolution layer with CoordGate
@@ -174,11 +175,17 @@ class CG_convolution_layer(nn.Module):
     if three_d is true, they will share convolutions but not the coordgate.
     '''
     def __init__(self, n_channels_in, n_channels_out, n_channels_CG, kernelsize, init_size = [640,640],
-                 locally_connected=False,CG_type='pos', three_d=False,**kwargs):
+                 locally_connected=False,CG_type='pos', three_d=False, parameter_conv=False,**kwargs):
         super(CG_convolution_layer, self).__init__()
         self.kernelsize = kernelsize
 
-        self.conv = nn.Conv2d(n_channels_in,n_channels_CG,kernelsize,padding=kernelsize//2)
+        if parameter_conv:
+            self.conv = ParameterConv2d(n_channels_in,n_channels_CG,kernelsize,padding=kernelsize//2)
+        else:
+            self.conv = nn.Conv2d(n_channels_in,n_channels_CG,kernelsize,padding=kernelsize//2)
+
+        self.parameter_conv = parameter_conv
+
         if locally_connected:
             self.create_locally_connected_conv(kernelsize)
 
@@ -195,7 +202,11 @@ class CG_convolution_layer(nn.Module):
         if self.three_d:
             x = torch.concat([self.CG[i](self.conv(x[:,i])) for i in range(x.shape[1])],dim=1)
         else:
-            x = self.CG(self.conv(x))
+            if self.parameter_conv:
+                x, weights = x
+                x = self.CG(self.conv(x,weights))
+            else:
+                x = self.CG(self.conv(x))
         return x
     
     def create_locally_connected_conv(self,kernelsize):
@@ -205,6 +216,52 @@ class CG_convolution_layer(nn.Module):
             for j in range(kernelsize):
                 locally_connected_kernel[i*kernelsize+j,0,i,j] = 1
         self.conv.weight = nn.Parameter(locally_connected_kernel,requires_grad=False)
+        self.conv.bias = nn.Parameter(torch.zeros_like(self.conv.bias),requires_grad=False)
+
+
+
+class ParameterConv2d(nn.Module):
+    '''
+    Convolution layer with parameter kernel
+    '''
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1,bias=True):
+        super(ParameterConv2d, self).__init__()
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.kernel_size = kernel_size
+
+        self.stride = stride
+        self.padding = padding
+        self.dilation = dilation
+        self.groups = groups
+
+    def forward(self, x, weight, bias=None):
+        return F.conv2d(x, weight, bias, self.stride, self.padding, self.dilation, self.groups)
+
+
+
+class gaussian_maker(torch.nn.Module):
+    def __init__(self, kernelsize=9,n_channels=3,device='cuda'):
+        super(gaussian_maker, self).__init__()
+        self.kernelsize = kernelsize
+        self.xx = torch.linspace(-1, 1, kernelsize)
+        self.yy = torch.linspace(-1, 1, kernelsize)
+        self.x, self.y = torch.meshgrid(self.xx, self.yy)
+        self.x = self.x.to(device)
+        self.y = self.y.to(device)
+
+        centers = [[0,0]] * n_channels
+        sigmas = [[0.1,0.1]] * n_channels
+        self.gauss_params = torch.nn.Parameter(torch.stack((torch.tensor(centers).to(device),torch.tensor(sigmas).to(device)),dim=0), requires_grad=True)
+
+    def forward(self):
+        centers = self.gauss_params[0]
+        sigmas = self.gauss_params[1]
+
+        gaussian = torch.exp(-(((self.y[None]-centers[:,1][:,None,None])**2 / (2 * sigmas[:,1][:,None,None]**2)) + 
+                            ((self.x[None]-centers[:,0][:,None,None])**2 / (2 * sigmas[:,0][:,None,None]**2)))).unsqueeze(1)
+
+        return gaussian / gaussian.sum(dim=(2,3)).unsqueeze(2).unsqueeze(3)
 
 
 
